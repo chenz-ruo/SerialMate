@@ -1,0 +1,15 @@
+#pragma once
+
+#define SERIAL_MATE_VERSION_W L"@PROJECT_VERSION@"
+#define SERIAL_MATE_VERSION_A "@PROJECT_VERSION@"
+#define SERIAL_MATE_VERSION_COMMA @PROJECT_VERSION_MAJOR@,@PROJECT_VERSION_MINOR@,@PROJECT_VERSION_PATCH@,0
+
+namespace version {
+inline constexpr wchar_t kCurrent[] = SERIAL_MATE_VERSION_W;
+inline constexpr wchar_t kGitHubOwner[] = L"chenz-ruo";
+inline constexpr wchar_t kGiteeOwner[] = L"yycz";
+inline constexpr wchar_t kGitHubRepository[] = L"SerialMate";
+inline constexpr wchar_t kGiteeRepository[] = L"serial-mate";
+inline constexpr wchar_t kGiteeManifestName[] = L"update-manifest-gitee.txt";
+inline constexpr wchar_t kGitHubManifestName[] = L"update-manifest-github.txt";
+}
