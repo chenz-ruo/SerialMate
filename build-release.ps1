@@ -60,7 +60,6 @@ $targets = @(
     "TextCodecStreamTests",
     "SerialPortInfoTests",
     "LogWriterTests",
-    "RawRxWriterTests",
     "RxIngressQueueTests",
     "SerialPortShutdownTests",
     "VersionConsistencyTests",

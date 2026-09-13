@@ -146,7 +146,11 @@ bool SerialPort::Open(const SerialConfig& config, DataCallback onData, ErrorCall
                                       nullptr);
     if (handle == INVALID_HANDLE_VALUE) {
         const DWORD code = GetLastError();
-        error = L"打开 " + config.port + L" 失败：" + util::Win32Error(code);
+        if (code == ERROR_ACCESS_DENIED || code == ERROR_SHARING_VIOLATION) {
+            error = L"串口被占用或无法打开：" + config.port;
+        } else {
+            error = L"打开 " + config.port + L" 失败：" + util::Win32Error(code);
+        }
         return false;
     }
     state->handle.store(handle);

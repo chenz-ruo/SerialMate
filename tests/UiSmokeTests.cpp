@@ -25,7 +25,7 @@ enum ControlId : int {
     ID_TIMESTAMP, ID_AUTOLINE, ID_SIMPLE_MODE, ID_RX_ONLY, ID_RX_HEX, ID_RX_FILE,
     ID_TX_HEX, ID_TX_CR, ID_TX_LF, ID_TIMED, ID_INTERVAL, ID_SEND_TIMED,
     ID_COPY_ALL, ID_CLEAR_LOG, ID_PAUSE, ID_EXPORT, ID_LOG_VIEW,
-    ID_SEND_EDIT, ID_SEND, ID_CLEAR_SEND, ID_LOAD_FILE, ID_SEND_FILE,
+    ID_SEND_EDIT, ID_SEND, ID_CLEAR_SEND, ID_LOAD_FILE,
     ID_STATUS_LEFT, ID_STATUS_RIGHT, ID_ENCODING
 };
 
@@ -289,7 +289,7 @@ int wmain(int argc, wchar_t** argv) {
     const std::wstring port = argc > 2 ? argv[2] : L"COM7";
     const auto outputDirectory = std::filesystem::path(exe).parent_path();
     const auto exportPath = outputDirectory / L"ui-smoke-export.txt";
-    const auto rawRxPath = outputDirectory / L"ui-smoke-rx.bin";
+    const auto realtimeRecordPath = outputDirectory / L"ui-smoke-realtime-record.txt";
     const auto defaultSnapshot1536 = outputDirectory / L"ui-default-1536x1024.bmp";
     const auto defaultSnapshot1920 = outputDirectory / L"ui-default-1920x1080.bmp";
     const auto connectedSnapshot1536 = outputDirectory / L"ui-connected-1536x1024.bmp";
@@ -297,7 +297,7 @@ int wmain(int argc, wchar_t** argv) {
     const auto legacyConfig = outputDirectory / L"SerialAssistant.ini";
     const std::wstring originalClipboard = ClipboardText();
     std::error_code ignored;
-    std::filesystem::remove(rawRxPath, ignored);
+    std::filesystem::remove(realtimeRecordPath, ignored);
     std::filesystem::remove(currentConfig, ignored);
     std::filesystem::remove(legacyConfig, ignored);
     std::wstring command = L"\"" + exe + L"\"";
@@ -634,9 +634,9 @@ int wmain(int argc, wchar_t** argv) {
     }
     const LRESULT rxBeforeHex = SendMessageW(main, WM_TEST_QUERY, 1, 0);
     const LRESULT txBeforeHex = SendMessageW(main, WM_TEST_QUERY, 2, 0);
-    SetTestValue(main, 14, rawRxPath.wstring());
+    SetTestValue(main, 14, realtimeRecordPath.wstring());
     if (SendMessageW(main, WM_TEST_QUERY, 11, 0) != 1) {
-        std::wcerr << L"Raw RX writer did not start\n"; PostMessageW(main, WM_CLOSE, 0, 0); cleanup(); return 51;
+        std::wcerr << L"Real-time recorder did not start\n"; PostMessageW(main, WM_CLOSE, 0, 0); cleanup(); return 51;
     }
     Click(main, ID_SEND);
     if (!WaitUntil([&] {
@@ -645,16 +645,18 @@ int wmain(int argc, wchar_t** argv) {
     }, std::chrono::seconds(4))) {
         std::wcerr << L"UI HEX send record missing\n"; PostMessageW(main, WM_CLOSE, 0, 0); cleanup(); return 9;
     }
-    SetTestValue(main, 14, L"");
-    const auto rawBytes = ReadFileBytes(rawRxPath);
     const std::array<char, 8> expectedRaw{0x00, 0x01, 0x7f, static_cast<char>(0x80),
                                           static_cast<char>(0xfe), static_cast<char>(0xff), 0x0d, 0x0a};
+    SetTestValue(main, 14, L"");
+    const auto recorderBytes = ReadFileBytes(realtimeRecordPath);
+    const std::string recorderText(recorderBytes.begin(), recorderBytes.end());
     if (SendMessageW(main, WM_TEST_QUERY, 11, 0) != 0 ||
-        rawBytes != std::vector<char>(expectedRaw.begin(), expectedRaw.end())) {
-        std::wcerr << L"Raw RX file did not preserve binary loopback bytes exactly\n";
+        recorderText.find(u8"→ TX 00 01 7F 80 FE FF 0D 0A") == std::string::npos ||
+        recorderText.find(u8"← RX 00 01 7F 80 FE FF 0D 0A") == std::string::npos) {
+        std::wcerr << L"Real-time recorder did not preserve timestamped TX/RX HEX records\n";
         PostMessageW(main, WM_CLOSE, 0, 0); cleanup(); return 53;
     }
-    std::wcout << L"PASS: raw RX file preserves bytes independently from structured log\n";
+    std::wcout << L"PASS: real-time recorder preserves timestamped TX/RX HEX records\n";
     std::wcout << L"PASS: UI HEX send\n";
     if (SendMessageW(main, WM_TEST_QUERY, 7, 0) <= 0) {
         std::wcerr << L"Communication view metrics were not available\n";
@@ -667,16 +669,11 @@ int wmain(int argc, wchar_t** argv) {
                                        const std::wstring& editorText, const std::vector<char>& expected,
                                        int encodingIndex, bool hex) {
         const auto inputPath = outputDirectory / (std::wstring(name) + L"-input.txt");
-        const auto capturePath = outputDirectory / (std::wstring(name) + L"-rx.bin");
         {
             std::ofstream input(inputPath, std::ios::binary | std::ios::trunc);
             input.write(fileBytes.data(), static_cast<std::streamsize>(fileBytes.size()));
             input.close();
             if (!input) { std::wcerr << name << L": cannot write fixture\n"; return false; }
-            // RawRxWriter appends, so each run needs a fresh test capture.
-            std::ofstream capture(capturePath, std::ios::binary | std::ios::trunc);
-            capture.close();
-            if (!capture) { std::wcerr << name << L": cannot reset test capture\n"; return false; }
         }
         const auto setCheck = [&](int id, bool checked) {
             SendMessageW(GetDlgItem(main, id), BM_SETCHECK, checked ? BST_CHECKED : BST_UNCHECKED, 0);
@@ -700,29 +697,19 @@ int wmain(int argc, wchar_t** argv) {
         if (rxBefore != txBefore) {
             std::wcerr << name << L": previous loopback has not drained\n"; return false;
         }
-        SetTestValue(main, 14, capturePath.wstring());
-        if (SendMessageW(main, WM_TEST_QUERY, 11, 0) != 1) {
-            std::wcerr << name << L": capture did not start\n"; return false;
-        }
         Click(main, ID_SEND);
         const auto count = static_cast<LRESULT>(expected.size());
         const bool received = WaitUntil([&] {
             return SendMessageW(main, WM_TEST_QUERY, 1, 0) >= rxBefore + count &&
                    SendMessageW(main, WM_TEST_QUERY, 2, 0) >= txBefore + count;
         }, std::chrono::seconds(5));
-        SetTestValue(main, 14, L"");
-        const auto actual = ReadFileBytes(capturePath);
         const auto rx = SendMessageW(main, WM_TEST_QUERY, 1, 0) - rxBefore;
         const auto tx = SendMessageW(main, WM_TEST_QUERY, 2, 0) - txBefore;
-        if (!received || rx != count || tx != count || actual != expected ||
-            SendMessageW(main, WM_TEST_QUERY, 11, 0) != 0) {
-            const auto mismatch = std::mismatch(actual.begin(), actual.end(), expected.begin(), expected.end());
-            std::wcerr << name << L": expected=" << count << L", RX=" << rx << L", TX=" << tx
-                       << L", captured=" << actual.size() << L", first difference="
-                       << std::distance(actual.begin(), mismatch.first) << L'\n';
+        if (!received || rx != count || tx != count) {
+            std::wcerr << name << L": expected=" << count << L", RX=" << rx << L", TX=" << tx << L'\n';
             return false;
         }
-        std::wcout << L"PASS: file/editor/send serial loopback " << name << L" (" << count << L" bytes, exact match)\n";
+        std::wcout << L"PASS: file/editor/send serial loopback " << name << L" (" << count << L" bytes)\n";
         return true;
     };
     std::string ascii;

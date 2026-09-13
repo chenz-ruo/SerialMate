@@ -18,8 +18,6 @@ add_executable(SerialMate WIN32
     src/SerialPort.h
     src/LogWriter.cpp
     src/LogWriter.h
-    src/RawRxWriter.cpp
-    src/RawRxWriter.h
     src/Utilities.cpp
     src/Utilities.h
     src/TextCodec.cpp
@@ -55,7 +53,7 @@ target_link_libraries(SerialMate PRIVATE
 if(MSVC)
     set_property(TARGET SerialMate PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
     target_compile_options(SerialMate PRIVATE $<$<CONFIG:Release>:/O1 /GL>)
-    target_link_options(SerialMate PRIVATE $<$<CONFIG:Release>:/LTCG /OPT:REF /OPT:ICF>)
+    target_link_options(SerialMate PRIVATE $<$<CONFIG:Release>:/Brepro /LTCG /OPT:REF /OPT:ICF>)
 endif()
 
 add_executable(SerialMateTests
@@ -193,17 +191,6 @@ if(MSVC)
     set_property(TARGET UpdateInstallerTests PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 endif()
 
-add_executable(RawRxWriterTests
-    tests/RawRxWriterTests.cpp
-    src/RawRxWriter.cpp
-    src/RawRxWriter.h
-)
-target_compile_definitions(RawRxWriterTests PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
-target_compile_options(RawRxWriterTests PRIVATE /W4 /permissive- /utf-8 /EHsc)
-if(MSVC)
-    set_property(TARGET RawRxWriterTests PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
-endif()
-
 add_executable(RxIngressQueueTests
     tests/RxIngressQueueTests.cpp
     src/RxIngressQueue.cpp
@@ -257,7 +244,6 @@ add_test(NAME CommView COMMAND CommViewTests)
 add_test(NAME TextCodecStream COMMAND TextCodecStreamTests)
 add_test(NAME SerialPortInfo COMMAND SerialPortInfoTests)
 add_test(NAME LogWriter COMMAND LogWriterTests)
-add_test(NAME RawRxWriter COMMAND RawRxWriterTests)
 add_test(NAME RxIngressQueue COMMAND RxIngressQueueTests)
 add_test(NAME SerialPortShutdown COMMAND SerialPortShutdownTests)
 add_test(NAME VersionConsistency COMMAND VersionConsistencyTests)

@@ -1,7 +1,6 @@
 #include "CommRecord.h"
 
 #include <algorithm>
-#include <cwctype>
 #include <limits>
 #include <stdexcept>
 
@@ -81,34 +80,6 @@ std::wstring FullRecord(const Record& record, bool timestamps, textcodec::TextEn
         result += L"\r\n";
     }
     return result;
-}
-
-bool ParseHexQuery(const std::wstring& text, std::vector<std::uint8_t>& bytes) {
-    std::wstring compact;
-    compact.reserve(text.size());
-    for (const wchar_t ch : text) {
-        if (iswspace(ch) || ch == L',' || ch == L'-' || ch == L':') continue;
-        if (!iswxdigit(ch)) return false;
-        compact.push_back(ch);
-    }
-    if (compact.empty() || (compact.size() % 2) != 0) return false;
-    bytes.clear();
-    bytes.reserve(compact.size() / 2);
-    const auto nibble = [](wchar_t ch) -> unsigned {
-        if (ch >= L'0' && ch <= L'9') return static_cast<unsigned>(ch - L'0');
-        ch = static_cast<wchar_t>(towupper(ch));
-        return static_cast<unsigned>(ch - L'A' + 10);
-    };
-    for (std::size_t i = 0; i < compact.size(); i += 2) {
-        bytes.push_back(static_cast<std::uint8_t>((nibble(compact[i]) << 4) | nibble(compact[i + 1])));
-    }
-    return true;
-}
-
-bool ContainsBytes(const std::vector<std::uint8_t>& haystack,
-                   const std::vector<std::uint8_t>& needle) {
-    if (needle.empty()) return false;
-    return std::search(haystack.begin(), haystack.end(), needle.begin(), needle.end()) != haystack.end();
 }
 
 std::size_t RowBucket(std::size_t bytesPerRow) {
@@ -320,26 +291,6 @@ std::wstring RecordBuffer::Copy(CopyFormat format,
         result += FormatRecord(record, format, timestamps, encoding, bytesPerRow);
     }
     return result;
-}
-
-const Record* RecordBuffer::FindNext(const std::wstring& query, std::uint64_t afterId,
-                                     textcodec::TextEncoding encoding) const {
-    if (records_.empty() || query.empty()) return nullptr;
-    std::vector<std::uint8_t> hex;
-    const bool validHex = ParseHexQuery(query, hex);
-    const auto matches = [&](const Record& record) {
-        if (validHex && ContainsBytes(record.rawBytes, hex)) return true;
-        if (!record.rawBytes.empty() && AsciiBytes(record.rawBytes, encoding).find(query) != std::wstring::npos) return true;
-        return record.message.find(query) != std::wstring::npos;
-    };
-    for (int pass = 0; pass < 2; ++pass) {
-        for (const auto& record : records_) {
-            if (pass == 0 && record.id <= afterId) continue;
-            if (pass == 1 && record.id > afterId) continue;
-            if (matches(record)) return &record;
-        }
-    }
-    return nullptr;
 }
 
 } // namespace comm

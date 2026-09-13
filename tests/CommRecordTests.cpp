@@ -134,15 +134,6 @@ int wmain() {
     Check(trimRecords.Records().size() == 2 && trimRecords.Records().front().id == r2.id, L"按记录数淘汰");
     Check(trimRecords.RowOf(r1.id) == std::nullopt && trimRecords.RowOf(r3.id).has_value(), L"淘汰索引失效");
 
-    RecordBuffer search;
-    const auto& s1 = search.Add(Direction::Rx, L"1", {0x41, 0x54, 0x0d, 0x0a});
-    const auto& s2 = search.Add(Direction::Tx, L"2", {0x42, 0x43});
-    Check(search.FindNext(L"41 54 0D 0A") == &s1, L"HEX搜索");
-    Check(search.FindNext(L"AT") == &s1, L"ASCII搜索");
-    Check(search.FindNext(L"BC", s1.id) == &s2, L"按ID继续搜索");
-    Check(search.FindNext(L"AT", s1.id) == &s1, L"搜索循环");
-    Check(search.FindNext(L"missing") == nullptr, L"未命中搜索");
-
     bool threw = false;
     try {
         RecordBuffer small(4, 4);

@@ -8,7 +8,6 @@
 
 #include "LogWriter.h"
 #include "Product.h"
-#include "RawRxWriter.h"
 #include "resource.h"
 #include "SerialPort.h"
 #include "UpdateChecker.h"
@@ -66,19 +65,13 @@ void CenterWindowOnMonitor(HWND window) {
                  SWP_NOACTIVATE | SWP_NOZORDER | SWP_NOSIZE);
 }
 
-void RemoveLegacyPreviousExecutable() {
-    const std::wstring previous =
-        util::ExecutableDirectory() + L"\\SerialAssistant.exe.previous";
-    DeleteFileW(previous.c_str());
-}
-
 enum ControlId : int {
     ID_OPEN = 100, ID_CLOSE, ID_NEW, ID_LOG, ID_ABOUT,
     ID_PORT, ID_BAUD, ID_DATA_BITS, ID_STOP_BITS, ID_PARITY, ID_FLOW,
     ID_TIMESTAMP, ID_AUTOLINE, ID_SIMPLE_MODE, ID_RX_ONLY, ID_RX_HEX, ID_RX_FILE,
     ID_TX_HEX, ID_TX_CR, ID_TX_LF, ID_TIMED, ID_INTERVAL, ID_SEND_TIMED,
     ID_COPY_ALL, ID_CLEAR_LOG, ID_PAUSE, ID_EXPORT, ID_LOG_VIEW,
-    ID_SEND_EDIT, ID_SEND, ID_CLEAR_SEND, ID_LOAD_FILE, ID_SEND_FILE,
+    ID_SEND_EDIT, ID_SEND, ID_CLEAR_SEND, ID_LOAD_FILE,
     ID_STATUS_LEFT, ID_STATUS_RIGHT, ID_ENCODING,
     ID_COPY_FULL = 500, ID_COPY_HEX, ID_COPY_TEXT,
     ID_COPY_SELECTED_FULL, ID_COPY_SELECTED_HEX, ID_COPY_SELECTED_TEXT
@@ -276,10 +269,9 @@ private:
     void AppendSystem(const std::wstring& message, bool error = false);
     void UpdateStatus();
     void ToggleLogging();
-    void ToggleRawReceive();
+    void ToggleRecorder();
     void ExportLog();
     bool ExportLogPath(const std::wstring& path);
-    void SendFile();
     bool LoadFilePath(const std::wstring& path);
     bool Checked(int id) const;
     int ComboSelection(int id) const;
@@ -293,14 +285,11 @@ private:
     HBRUSH backgroundBrush_{};
     SerialPort serial_;
     std::shared_ptr<LogWriter> logWriter_ = std::make_shared<LogWriter>();
-    std::shared_ptr<RawRxWriter> rawRxWriter_ = std::make_shared<RawRxWriter>();
     std::shared_ptr<LogWriter> recorder_ = std::make_shared<LogWriter>();
     std::shared_ptr<RxIngressQueue> rxIngress_ = std::make_shared<RxIngressQueue>();
     std::shared_ptr<std::atomic_int> encodingChoice_ = std::make_shared<std::atomic_int>(0);
     UpdateChecker updateChecker_;
     std::wstring structuredLogPath_;
-    std::wstring rawRxPath_;
-    std::vector<std::uint8_t> loadedFile_;
     std::uint64_t rxBytes_ = 0;
     std::uint64_t txBytes_ = 0;
     bool paused_ = false;
@@ -582,16 +571,7 @@ void Application::ScanPorts(bool preserve) {
     SendMessageW(combo, CB_RESETCONTENT, 0, 0);
     int selection = -1;
     for (std::size_t i = 0; i < portInfos_.size(); ++i) {
-        auto display = SerialPortDisplayName(portInfos_[i]);
-        const std::wstring devicePath = L"\\\\.\\" + portInfos_[i].portName;
-        HANDLE probe = CreateFileW(devicePath.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr,
-                                   OPEN_EXISTING, 0, nullptr);
-        if (probe == INVALID_HANDLE_VALUE &&
-            (GetLastError() == ERROR_ACCESS_DENIED || GetLastError() == ERROR_SHARING_VIOLATION)) {
-            display += L"（占用）";
-        } else if (probe != INVALID_HANDLE_VALUE) {
-            CloseHandle(probe);
-        }
+        const auto display = SerialPortDisplayName(portInfos_[i]);
         const LRESULT item = SendMessageW(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(display.c_str()));
         SendMessageW(combo, CB_SETITEMDATA, item, static_cast<LPARAM>(i));
         if (_wcsicmp(portInfos_[i].portName.c_str(), old.c_str()) == 0 ||
@@ -619,10 +599,9 @@ void Application::OpenPort() {
     config.rtsCts = ComboSelection(ID_FLOW) == 1;
     std::wstring error;
     if (!serial_.Open(config,
-        [hwnd = window_, ingress = rxIngress_, raw = rawRxWriter_, log = logWriter_, recorder = recorder_, encodingChoice = encodingChoice_](std::vector<std::uint8_t> bytes) {
+        [hwnd = window_, ingress = rxIngress_, log = logWriter_, recorder = recorder_, encodingChoice = encodingChoice_](std::vector<std::uint8_t> bytes) {
             if (bytes.empty()) return;
             const std::wstring timestamp = util::Timestamp();
-            raw->Write(bytes);
             comm::Record event;
             event.direction = comm::Direction::Rx;
             event.timestamp = timestamp;
@@ -865,13 +844,6 @@ void Application::UpdateStatus() {
                      std::to_wstring(logOverflow.records) + L" 条记录。", true);
         MessageBeep(MB_ICONWARNING);
     }
-    const auto rawOverflow = rawRxWriter_->TakeOverflowStatus();
-    if (rawOverflow.chunks != 0) {
-        AppendSystem(L"原始接收文件写入速度不足，已丢失 " +
-                     std::to_wstring(rawOverflow.bytes) + L" 字节 / " +
-                     std::to_wstring(rawOverflow.chunks) + L" 个数据块。", true);
-        MessageBeep(MB_ICONWARNING);
-    }
     const auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() - started_).count();
     wchar_t text[160]{};
     swprintf_s(text, L"RX: %llu    TX: %llu    运行时间: %02lld:%02lld:%02lld", rxBytes_, txBytes_,
@@ -900,7 +872,7 @@ void Application::ToggleLogging() {
     AppendSystem(L"日志记录已启动：" + structuredLogPath_);
 }
 
-void Application::ToggleRawReceive() {
+void Application::ToggleRecorder() {
     if (recorder_->IsActive()) {
         recorder_->Stop();
         SetWindowTextW(Get(ID_RX_FILE), L"实时记录");
@@ -935,22 +907,11 @@ bool Application::ExportLogPath(const std::wstring& path) {
     return stream.good();
 }
 
-void Application::SendFile() {
-    std::wstring path;
-    if (loadedFile_.empty()) path = ChoosePath(window_, false, L"发送文件", L"所有文件 (*.*)\0*.*\0");
-    if (!path.empty()) LoadFilePath(path);
-    if (loadedFile_.empty()) return;
-    if (!serial_.IsOpen()) { MessageBoxW(window_, L"请先打开串口。", L"串口助手", MB_OK | MB_ICONINFORMATION); return; }
-    if (!serial_.Send(loadedFile_)) { MessageBoxW(window_, L"文件过大或发送队列已满（单次上限 4 MiB）。", L"发送失败", MB_OK | MB_ICONWARNING); return; }
-    txBytes_ += loadedFile_.size();
-    AppendRecord(false, loadedFile_);
-}
-
 bool Application::LoadFilePath(const std::wstring& path) {
     std::ifstream stream(std::filesystem::path(path), std::ios::binary);
     if (!stream) return false;
-    loadedFile_.assign(std::istreambuf_iterator<char>(stream), {});
-    SetWindowTextW(Get(ID_SEND_EDIT), textcodec::Decode(loadedFile_, encoding_).c_str());
+    const std::vector<std::uint8_t> bytes(std::istreambuf_iterator<char>(stream), {});
+    SetWindowTextW(Get(ID_SEND_EDIT), textcodec::Decode(bytes, encoding_).c_str());
     return true;
 }
 
@@ -986,7 +947,7 @@ void Application::Command(int id, int notification, HWND) {
         break;
     case ID_PORT: if (notification == CBN_DROPDOWN && !serial_.IsOpen()) ScanPorts(true); break;
     case ID_LOG: ToggleLogging(); break;
-    case ID_RX_FILE: if (notification == BN_CLICKED) ToggleRawReceive(); break;
+    case ID_RX_FILE: if (notification == BN_CLICKED) ToggleRecorder(); break;
     case ID_TIMED:
         if (Checked(ID_TIMED)) {
             timedSendBlocked_ = false;
@@ -1008,7 +969,6 @@ void Application::Command(int id, int notification, HWND) {
         if (!path.empty() && !LoadFilePath(path)) MessageBoxW(window_, L"无法读取所选文件。", L"加载文件", MB_OK | MB_ICONERROR);
         break;
     }
-    case ID_SEND_FILE: SendFile(); break;
     case ID_NEW: {
         std::wstring modulePath(32768, L'\0');
         const DWORD length = GetModuleFileNameW(nullptr, modulePath.data(),
@@ -1164,7 +1124,6 @@ void Application::Shutdown() {
     DrainReceive();
     FlushRxPending();
     rxIngress_->Stop();
-    rawRxWriter_->Stop();
     recorder_->Stop();
     logWriter_->Stop();
     // All producers are now stopped. Reclaim asynchronous payloads that were
@@ -1196,7 +1155,7 @@ LRESULT Application::QueryState(WPARAM query) const {
     case 8: return static_cast<LRESULT>(recordView_.HexLeft());
     case 9: return static_cast<LRESULT>(recordView_.BytesPerRow());
     case 10: return encoding_ == textcodec::TextEncoding::Utf8 ? 0 : encoding_ == textcodec::TextEncoding::Gbk ? 1 : 2;
-    case 11: return rawRxWriter_->IsActive() ? 1 : 0;
+    case 11: return recorder_->IsActive() ? 1 : 0;
     case 20: return settingsGeometry_.serialCard.top;
     case 21: return settingsGeometry_.serialCard.bottom;
     case 22: return settingsGeometry_.receiveCard.top;
@@ -1223,9 +1182,8 @@ void Application::SetTestValue(ULONG_PTR key, const wchar_t* value) {
     else if (key == 7) { recordView_.SelectRow(0); CopyRecords(ID_COPY_SELECTED_FULL); }
     else if (key >= 8 && key <= 13) { CopyRecords(static_cast<int>(key - 8 + ID_COPY_FULL)); }
     else if (key == 14) {
-        rawRxPath_ = value;
-        rawRxWriter_->Stop();
-        rawRxWriter_->Start(rawRxPath_);
+        recorder_->Stop();
+        if (*value) recorder_->Start(value);
     }
 }
 
@@ -1315,7 +1273,6 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
 int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int showCommand) {
     int updateExitCode = 0;
     if (TryRunUpdateInstallerMode(updateExitCode)) return updateExitCode;
-    RemoveLegacyPreviousExecutable();
     SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
     INITCOMMONCONTROLSEX controls{sizeof(controls), ICC_STANDARD_CLASSES | ICC_WIN95_CLASSES}; InitCommonControlsEx(&controls);
     const HMODULE richEditModule = LoadLibraryW(L"Msftedit.dll");

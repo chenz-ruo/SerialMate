@@ -9,7 +9,12 @@ $buildDirectory = Join-Path $projectRoot "build"
 $releaseDirectory = Join-Path $buildDirectory "Release"
 $distributionDirectory = Join-Path $projectRoot "dist\SerialMate"
 $exe = Join-Path $releaseDirectory "SerialMate.exe"
+$distributionExe = Join-Path $distributionDirectory "SerialMate.exe"
 if (-not (Test-Path -LiteralPath $exe)) { throw "Release EXE is missing. Run build-release.ps1 first." }
+if (-not (Test-Path -LiteralPath $distributionExe)) { throw "Distribution EXE is missing. Run build-release.ps1 first." }
+if ((git -C $projectRoot status --porcelain).Count -ne 0) {
+    throw "Working tree must be clean before release verification."
+}
 
 function Invoke-Checked([string]$Program, [string[]]$Arguments) {
     & $Program @Arguments
@@ -64,11 +69,41 @@ $tree = (git -C $projectRoot rev-parse 'HEAD^{tree}').Trim()
 $buildInputFingerprint = Get-BuildInputFingerprint $projectRoot
 $sha = (Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash.ToUpperInvariant()
 $size = (Get-Item -LiteralPath $exe).Length
+if ((Get-FileHash -LiteralPath $distributionExe -Algorithm SHA256).Hash.ToUpperInvariant() -ne $sha) {
+    throw "Distribution EXE does not match the verified build output."
+}
+$cmakeText = Get-Content -LiteralPath (Join-Path $projectRoot "CMakeLists.txt") -Encoding UTF8 -Raw
+$versionMatch = [regex]::Match($cmakeText, 'project\([^\)]*VERSION\s+([0-9]+\.[0-9]+\.[0-9]+)')
+if (-not $versionMatch.Success) { throw "Unable to read project version from CMakeLists.txt." }
+$version = $versionMatch.Groups[1].Value
+foreach ($manifestName in @("update-manifest-gitee.txt", "update-manifest-github.txt")) {
+    $manifest = Get-Content -LiteralPath (Join-Path $projectRoot $manifestName) -Encoding UTF8 -Raw
+    $expectedUrl = if ($manifestName -eq "update-manifest-gitee.txt") {
+        "url=https://gitee.com/yycz/serial-mate/releases/download/v$version/SerialMate.exe"
+    } else {
+        "url=https://github.com/chenz-ruo/SerialMate/releases/download/v$version/SerialMate.exe"
+    }
+    if ($manifest -notmatch [regex]::Escape("version=$version") -or
+        $manifest -notmatch [regex]::Escape($expectedUrl) -or
+        $manifest -notmatch [regex]::Escape("sha256=$sha") -or
+        $manifest -notmatch [regex]::Escape("size=$size")) {
+        throw "$manifestName does not match the verified EXE."
+    }
+}
 $duration = [math]::Round(((Get-Date) - $started).TotalSeconds, 2)
 $report = @"
 VerificationType=RealHardwareLoopback
 HardwareVerified=true
+ReleaseReady=true
 AutomatedTests=Passed
+RealComLoopback=Passed
+OpenClose100=Passed
+CloseTail=Passed
+UiVerification=Passed
+UpdateVerification=Passed
+VersionConsistency=Passed
+WorkingTreeClean=true
+Version=$version
 VerifiedAt=$((Get-Date).ToString('yyyy-MM-dd HH:mm:ss zzz'))
 DurationSeconds=$duration
 OS=$([Environment]::OSVersion.VersionString)
@@ -78,14 +113,13 @@ BuildInputFingerprint=$buildInputFingerprint
 Exe=SerialMate.exe
 ExeSha256=$sha
 ExeSize=$size
-Port=$Port
+VerifiedPort=$Port
 Device=$deviceName
 InstanceId=$instanceId
 VID=$vidValue
 PID=$pidValue
 Parameters=115200,8,1,None,None
 LoopbackPayloadKiB=$PayloadKiB
-COM7Loopback=Passed
 SerialShutdownCycles=100
 UiSmoke=Passed
 PhysicalHotplug=NotRun

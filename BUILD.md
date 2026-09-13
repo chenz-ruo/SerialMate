@@ -26,15 +26,15 @@ ctest --test-dir build -C Release --output-on-failure
 
 主程序输出为 `build\Release\SerialMate.exe`。脚本同时复制可交付文件到 `dist\SerialMate`。
 
-## COM7 实机测试
+## 真实串口回环测试
 
-COM7 的 TX/RX 短接后执行：
+将待测串口的 TX/RX 短接后执行（以 COM7 为例）：
 
 ```powershell
 .\test-all.ps1 -Port COM7
 ```
 
-测试会驱动实际主窗口完成打开、ASCII/HEX、CR/LF、定时发送、文件发送、日志、导出、多开和关闭，并生成 1536×1024 默认/连接截图与 1920×1080 默认截图供视觉核验。
+测试会驱动实际主窗口完成打开、ASCII/HEX、CR/LF、定时发送、文件加载后发送、实时记录、启动日志、导出、多开和关闭，并生成 1536×1024 默认/连接截图与 1920×1080 默认截图供视觉核验。
 
 ## Gitee 发布令牌（一次设置）
 

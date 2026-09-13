@@ -101,7 +101,7 @@ int wmain(int argc, wchar_t** argv) {
     }
     std::wcout << L"PASS: 4 MiB send queue bound is enforced\n";
 
-    const std::vector<std::uint8_t> ascii{'R','6','0','-','A','S','C','I','I','\r','\n'};
+    const std::vector<std::uint8_t> ascii{'S','e','r','i','a','l','M','a','t','e','-','A','S','C','I','I','\r','\n'};
     receiver.Clear();
     if (!serial.Send(ascii) || !receiver.WaitFor(ascii, std::chrono::seconds(3))) {
         std::wcerr << L"ASCII loopback failed; received " << receiver.Size() << L" bytes\n";

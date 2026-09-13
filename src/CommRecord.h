@@ -102,10 +102,6 @@ public:
                       bool timestamps = true,
                       textcodec::TextEncoding encoding = textcodec::TextEncoding::Utf8,
                       std::size_t bytesPerRow = 16) const;
-    const Record* FindNext(const std::wstring& query,
-                           std::uint64_t afterId = 0,
-                           textcodec::TextEncoding encoding = textcodec::TextEncoding::Utf8) const;
-
 private:
     const Record& AddRecord(Record record);
     void Trim();
