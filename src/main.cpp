@@ -22,6 +22,7 @@
 #include "ExtensionControlIds.h"
 #include "SerialPortInfo.h"
 #include "RxIngressQueue.h"
+#include "ProtocolGenerator.h"
 
 #include <algorithm>
 #include <array>
@@ -378,6 +379,10 @@ private:
     void ToggleHexEditorMode();
     void NormalizeHexEditor();
     void NormalizeCustomHexEditor(int slot);
+    void LayoutProtocolControls();
+    void UpdateProtocolForm();
+    protocol::Function SelectedProtocolFunction() const;
+    void SetProtocolControlsVisible(bool visible);
     void AppendRecord(bool receive, const std::vector<std::uint8_t>& data);
     void CopyRecords(int mode);
     void ShowCopyMenu();
@@ -542,6 +547,44 @@ void Application::Create() {
         ShowWindow(edit, SW_HIDE);
         ShowWindow(send, SW_HIDE);
     }
+    Label(L"协议类型", protocolui::TypeLabel);
+    auto protocolType = Combo(protocolui::TypeCombo);
+    AddComboItems(protocolType, {L"Modbus RTU"}, 0);
+    Label(L"从机地址", protocolui::SlaveLabel);
+    auto slave = Make(L"EDIT", L"01", ES_MULTILINE | ES_AUTOHSCROLL | WS_TABSTOP,
+                      0, protocolui::SlaveEdit);
+    SetWindowSubclass(slave, IntervalEditSubclass, 1, 0);
+    CenterSingleLineEditText(slave);
+    Label(L"功能码", protocolui::FunctionLabel);
+    auto function = Combo(protocolui::FunctionCombo);
+    AddComboItems(function, {L"03 读保持寄存器", L"04 读输入寄存器",
+                             L"06 写单个寄存器", L"10 写多个寄存器"}, 0);
+    Label(L"起始地址", protocolui::AddressLabel);
+    auto address = Make(L"EDIT", L"0000", ES_MULTILINE | ES_AUTOHSCROLL | WS_TABSTOP,
+                        0, protocolui::AddressEdit);
+    Label(L"寄存器数量", protocolui::QuantityLabel);
+    auto quantity = Make(L"EDIT", L"0001", ES_MULTILINE | ES_AUTOHSCROLL | WS_TABSTOP,
+                         0, protocolui::QuantityEdit);
+    Label(L"写入数据", protocolui::DataLabel);
+    auto data = Make(L"EDIT", L"0000", ES_MULTILINE | ES_AUTOHSCROLL | WS_TABSTOP,
+                     0, protocolui::DataEdit);
+    for (HWND edit : {address, quantity, data}) {
+        SetWindowSubclass(edit, IntervalEditSubclass, 1, 0);
+        CenterSingleLineEditText(edit);
+        SendMessageW(edit, EM_SETLIMITTEXT, 1024, 0);
+    }
+    SendMessageW(slave, EM_SETLIMITTEXT, 2, 0);
+    Button(L"生成", protocolui::Generate, true);
+    Button(L"填入自定义...", protocolui::FillCustom);
+    Label(L"生成结果", protocolui::ResultLabel);
+    auto result = Make(L"EDIT", L"", ES_MULTILINE | ES_AUTOHSCROLL | ES_READONLY,
+                       0, protocolui::ResultEdit);
+    SetWindowSubclass(result, IntervalEditSubclass, 1, 0);
+    CenterSingleLineEditText(result);
+    Button(L"复制", protocolui::Copy);
+    Label(L"状态：等待生成", protocolui::Status);
+    SetProtocolControlsVisible(false);
+    UpdateProtocolForm();
     LoadConfiguration();
     Label(L"●  未连接", ID_STATUS_LEFT);
     auto statusRight = Label(L"RX: 0    TX: 0", ID_STATUS_RIGHT);
@@ -567,6 +610,118 @@ void Application::Create() {
         auto* message = new UpdateManifest(std::move(manifest));
         if (!PostMessageW(hwnd, WM_UPDATE_FOUND, 0, reinterpret_cast<LPARAM>(message))) delete message;
     });
+}
+
+protocol::Function Application::SelectedProtocolFunction() const {
+    switch (ComboSelection(protocolui::FunctionCombo)) {
+    case 1: return protocol::Function::ReadInputRegisters;
+    case 2: return protocol::Function::WriteSingleRegister;
+    case 3: return protocol::Function::WriteMultipleRegisters;
+    default: return protocol::Function::ReadHoldingRegisters;
+    }
+}
+
+void Application::SetProtocolControlsVisible(bool visible) {
+    const bool showData = visible &&
+                          SelectedProtocolFunction() == protocol::Function::WriteMultipleRegisters;
+    const std::array<int, 18> ids{
+        protocolui::TypeLabel, protocolui::TypeCombo, protocolui::SlaveLabel,
+        protocolui::SlaveEdit, protocolui::FunctionLabel, protocolui::FunctionCombo,
+        protocolui::AddressLabel, protocolui::AddressEdit, protocolui::QuantityLabel,
+        protocolui::QuantityEdit, protocolui::DataLabel, protocolui::DataEdit,
+        protocolui::Generate, protocolui::FillCustom, protocolui::ResultLabel,
+        protocolui::ResultEdit, protocolui::Copy, protocolui::Status};
+    for (int id : ids) {
+        HWND control = Get(id);
+        const bool show = visible && (id != protocolui::DataLabel && id != protocolui::DataEdit ||
+                                      showData);
+        if (!show && GetFocus() == control) SetFocus(Get(ID_SEND_EDIT));
+        ShowWindow(control, show ? SW_SHOWNA : SW_HIDE);
+    }
+}
+
+void Application::LayoutProtocolControls() {
+    const RECT card = layout_.protocolCard;
+    if (IsRectEmpty(&card)) return;
+    const UINT dpi = GetDpiForWindow(window_);
+    const auto scale = [dpi](int value) { return std::max(1, MulDiv(value, static_cast<int>(dpi), 96)); };
+    const auto move = [&](int id, int left, int top, int width, int height) {
+        MoveWindow(Get(id), left, top, std::max(1, width), std::max(1, height), TRUE);
+    };
+    const int left = card.left + layout_.cardPadding;
+    const int right = card.right - layout_.cardPadding;
+    const int width = right - left;
+    const int columnGap = scale(6);
+    int y = layout_.protocolTitle.bottom +
+            (layout_.settings.serialFields[0].top - layout_.settings.serialTitle.bottom);
+    const int rowGap = std::max(2, MulDiv(4, layout_.settings.scalePercent, 100));
+    constexpr int maximumRows = 8;
+    const int availableHeight = std::max(1, static_cast<int>(card.bottom) - layout_.cardPadding - y);
+    const int fittedRowHeight = std::max(1,
+        (availableHeight - (maximumRows - 1) * rowGap) / maximumRows);
+    const int rowHeight = std::min(
+        static_cast<int>(layout_.settings.interval.bottom - layout_.settings.interval.top),
+        fittedRowHeight);
+
+    const int typeLabelWidth = scale(66);
+    move(protocolui::TypeLabel, left, y, typeLabelWidth, rowHeight);
+    move(protocolui::TypeCombo, left + typeLabelWidth, y, width - typeLabelWidth, rowHeight);
+    y += rowHeight + rowGap;
+
+    const int slaveLabelWidth = scale(62);
+    const int slaveEditWidth = scale(44);
+    const int functionLabelWidth = scale(54);
+    move(protocolui::SlaveLabel, left, y, slaveLabelWidth, rowHeight);
+    move(protocolui::SlaveEdit, left + slaveLabelWidth, y, slaveEditWidth, rowHeight);
+    const int functionLabelX = left + slaveLabelWidth + slaveEditWidth + columnGap;
+    move(protocolui::FunctionLabel, functionLabelX, y, functionLabelWidth, rowHeight);
+    move(protocolui::FunctionCombo, functionLabelX + functionLabelWidth, y,
+         right - functionLabelX - functionLabelWidth, rowHeight);
+    y += rowHeight + rowGap;
+
+    const int addressLabelWidth = scale(66);
+    const int addressEditWidth = scale(58);
+    const int quantityLabelWidth = scale(76);
+    move(protocolui::AddressLabel, left, y, addressLabelWidth, rowHeight);
+    move(protocolui::AddressEdit, left + addressLabelWidth, y, addressEditWidth, rowHeight);
+    const int quantityLabelX = left + addressLabelWidth + addressEditWidth + columnGap;
+    move(protocolui::QuantityLabel, quantityLabelX, y, quantityLabelWidth, rowHeight);
+    move(protocolui::QuantityEdit, quantityLabelX + quantityLabelWidth, y,
+         right - quantityLabelX - quantityLabelWidth, rowHeight);
+    y += rowHeight + rowGap;
+
+    if (SelectedProtocolFunction() == protocol::Function::WriteMultipleRegisters) {
+        move(protocolui::DataLabel, left, y, addressLabelWidth, rowHeight);
+        move(protocolui::DataEdit, left + addressLabelWidth, y, width - addressLabelWidth, rowHeight);
+        y += rowHeight + rowGap;
+    }
+
+    const int buttonWidth = (width - columnGap) / 2;
+    move(protocolui::Generate, left, y, buttonWidth, rowHeight);
+    move(protocolui::FillCustom, left + buttonWidth + columnGap, y,
+         width - buttonWidth - columnGap, rowHeight);
+    y += rowHeight + rowGap;
+    move(protocolui::ResultLabel, left, y, width, rowHeight);
+    y += rowHeight + rowGap;
+    const int copyWidth = scale(56);
+    move(protocolui::ResultEdit, left, y, width - copyWidth - columnGap, rowHeight);
+    move(protocolui::Copy, right - copyWidth, y, copyWidth, rowHeight);
+    y += rowHeight + rowGap;
+    move(protocolui::Status, left, y, width, rowHeight);
+
+    for (int id : {protocolui::SlaveEdit, protocolui::AddressEdit, protocolui::QuantityEdit,
+                   protocolui::DataEdit, protocolui::ResultEdit})
+        CenterSingleLineEditText(Get(id));
+}
+
+void Application::UpdateProtocolForm() {
+    const auto function = SelectedProtocolFunction();
+    SetWindowTextW(Get(protocolui::AddressLabel),
+                   function == protocol::Function::WriteSingleRegister ? L"寄存器地址" : L"起始地址");
+    SetWindowTextW(Get(protocolui::QuantityLabel),
+                   function == protocol::Function::WriteSingleRegister ? L"写入值" : L"寄存器数量");
+    LayoutProtocolControls();
+    SetProtocolControlsVisible(layout_.extensionVisible);
 }
 
 void Application::Layout() {
@@ -710,6 +865,8 @@ void Application::Layout() {
         placeExtension(extension::EditFirst + i, slot.edit, visible);
         placeExtension(extension::SendFirst + i, slot.send, visible);
     }
+    LayoutProtocolControls();
+    SetProtocolControlsVisible(geometry.extensionVisible);
 
     moveRect(Get(ID_STATUS_LEFT), geometry.statusLeft);
     moveRect(Get(ID_STATUS_RIGHT), geometry.statusRight);
@@ -1176,6 +1333,9 @@ void Application::Command(int id, int notification, HWND) {
         return;
     }
     switch (id) {
+    case protocolui::FunctionCombo:
+        if (notification == CBN_SELCHANGE) UpdateProtocolForm();
+        break;
     case ID_OPEN: OpenPort(); break;
     case ID_CLOSE: ClosePort(); break;
     case ID_SEND: SendData(); break;
