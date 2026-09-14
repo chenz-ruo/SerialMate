@@ -387,6 +387,7 @@ private:
     void CopyProtocolResult();
     void ShowProtocolFillMenu();
     void FillProtocolResultIntoCustomSlot(int slot);
+    void EnableHexSendForProtocolResult();
     void UpdateProtocolFeedback(const std::wstring& text);
     void AppendRecord(bool receive, const std::vector<std::uint8_t>& data);
     void CopyRecords(int mode);
@@ -745,6 +746,12 @@ void Application::UpdateProtocolFeedback(const std::wstring& text) {
     SetWindowTextW(Get(protocolui::ResultLabel), text.c_str());
 }
 
+void Application::EnableHexSendForProtocolResult() {
+    if (Checked(ID_TX_HEX)) return;
+    CheckDlgButton(window_, ID_TX_HEX, BST_CHECKED);
+    ToggleHexEditorMode();
+}
+
 void Application::GenerateProtocolFrame() {
     protocol::Request request;
     request.function = SelectedProtocolFunction();
@@ -775,11 +782,13 @@ void Application::CopyProtocolResult() {
         UpdateProtocolFeedback(L"生成结果 · 请先生成数据");
         return;
     }
-    if (PutClipboardText(window_, protocolResult_.hex))
+    if (PutClipboardText(window_, protocolResult_.hex)) {
+        EnableHexSendForProtocolResult();
         UpdateProtocolFeedback(L"生成结果 · " + std::to_wstring(protocolResult_.frame.size()) +
                                L" bytes");
-    else
+    } else {
         UpdateProtocolFeedback(L"复制失败 · 无法访问剪贴板");
+    }
 }
 
 void Application::FillProtocolResultIntoCustomSlot(int slot) {
@@ -790,6 +799,7 @@ void Application::FillProtocolResultIntoCustomSlot(int slot) {
     if (slot < 0 || slot >= kMaximumStoredCustomSlots) return;
     SetWindowTextW(Get(extension::EditFirst + slot), protocolResult_.hex.c_str());
     protocolHexCustomData_.set(static_cast<std::size_t>(slot), !Checked(ID_TX_HEX));
+    EnableHexSendForProtocolResult();
     const std::wstring target = L"已填入自定义" + std::to_wstring(slot + 1);
     UpdateProtocolFeedback(Checked(ID_TX_HEX) ? target : target + L" · 请启用HEX发送");
 }

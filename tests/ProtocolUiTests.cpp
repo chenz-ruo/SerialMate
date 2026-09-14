@@ -324,9 +324,15 @@ void CheckInteractions(HWND window) {
     SelectFunction(window, 0);
 
     PutClipboard(L"OLD");
+    Check(Message(GetDlgItem(window, kTxHexId), BM_GETCHECK) == BST_UNCHECKED,
+          "HEX send unexpectedly enabled before protocol copy");
     Click(window, protocolui::Copy);
     const std::wstring copied = ClipboardText();
     Check(copied == expected, "copy did not place normalized frame on clipboard");
+    Check(Message(GetDlgItem(window, kTxHexId), BM_GETCHECK) == BST_CHECKED,
+          "successful protocol copy did not enable HEX send");
+    Message(GetDlgItem(window, kTxHexId), BM_SETCHECK, BST_UNCHECKED, 0);
+    Click(window, kTxHexId);
 
     for (int slot = 0; slot < kMaximumStoredCustomSlots; ++slot) {
         const auto sentinel = L"SLOT-" + std::to_wstring(slot + 1);
@@ -337,24 +343,23 @@ void CheckInteractions(HWND window) {
     const LRESULT txBefore = Message(window, kQuery, 2);
     const LRESULT hexBefore = Message(GetDlgItem(window, kTxHexId), BM_GETCHECK);
     Message(window, WM_COMMAND, MAKEWPARAM(protocolui::FillSlotFirst + 4, 0), 0);
-    for (int slot = 0; slot < kMaximumStoredCustomSlots; ++slot) {
-        const auto expectedSlot = slot == 4 ? expected : L"SLOT-" + std::to_wstring(slot + 1);
-        Check(Text(GetDlgItem(window, extension::EditFirst + slot)) == expectedSlot,
-              "fill changed the wrong custom slot");
-    }
-    Check(Text(GetDlgItem(window, kSendEditId)) == L"MAIN-UNCHANGED",
-          "fill changed the main send editor");
+    Check(Text(GetDlgItem(window, extension::EditFirst + 4)) == expected,
+          "fill re-encoded the generated frame instead of preserving HEX");
+    Check(Text(GetDlgItem(window, extension::EditFirst)) == L"53 4C 4F 54 2D 31",
+          "automatic HEX enable did not use the normal custom-data conversion path");
+    Check(Text(GetDlgItem(window, kSendEditId)) ==
+              L"4D 41 49 4E 2D 55 4E 43 48 41 4E 47 45 44",
+          "automatic HEX enable did not use the normal main-editor conversion path");
     Check(Message(window, kQuery, 1) == rxBefore && Message(window, kQuery, 2) == txBefore,
           "fill transmitted serial data");
-    Check(Message(GetDlgItem(window, kTxHexId), BM_GETCHECK) == hexBefore,
-          "fill changed the HEX send checkbox");
+    Check(hexBefore == BST_UNCHECKED &&
+              Message(GetDlgItem(window, kTxHexId), BM_GETCHECK) == BST_CHECKED,
+          "successful protocol fill did not enable HEX send");
     Check(Text(GetDlgItem(window, protocolui::ResultLabel)) ==
-              L"已填入自定义5 · 请启用HEX发送",
-          "fill guidance is missing when HEX send is disabled");
-    Message(GetDlgItem(window, kTxHexId), BM_SETCHECK, BST_CHECKED, 0);
-    Click(window, kTxHexId);
+              L"已填入自定义5",
+          "fill feedback still asks for HEX after automatic enable");
     Check(Text(GetDlgItem(window, extension::EditFirst + 4)) == expected,
-          "enabling HEX after protocol fill re-encoded the generated frame as text");
+          "automatic HEX enable re-encoded the generated frame as text");
     Message(window, WM_COMMAND,
             MAKEWPARAM(protocolui::FillSlotFirst + kMaximumStoredCustomSlots - 1, 0), 0);
     Check(Text(GetDlgItem(window, extension::EditFirst + kMaximumStoredCustomSlots - 1)) == expected,

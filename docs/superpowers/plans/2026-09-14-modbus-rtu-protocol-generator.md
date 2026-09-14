@@ -275,10 +275,10 @@ git commit -m "feat: add dynamic Modbus protocol form"
 In `ProtocolUiTests.cpp`, use real HWND messages and literal expectations:
 
 1. Set `SlaveEdit=01`, select `03`, set address `0000`, quantity `0002`, click Generate, and assert `ResultEdit == L"01 03 00 00 00 02 C4 0B"` and `ResultLabel == L"生成结果 · 8 bytes · CRC C4 0B"`.
-2. Seed the clipboard with `unchanged`, click Copy, and assert clipboard Unicode text equals the exact result.
+2. Seed the clipboard with `unchanged`, click Copy, and assert clipboard Unicode text equals the exact result and `ID_TX_HEX` becomes checked.
 3. Seed all 16 custom edits with distinct sentinel text and the main send edit with `MAIN-UNCHANGED`; record `WM_APP + 100` query keys `1` and `2`; record the `ID_TX_HEX` check state.
-4. Send `WM_COMMAND` with `protocolui::FillSlotFirst + 4`; assert only custom slot 5 becomes the generated HEX, all other slots remain unchanged, the main send edit remains `MAIN-UNCHANGED`, RX/TX counters do not change, and the HEX check state is unchanged.
-5. With HEX unchecked, assert `ResultLabel` is `已填入自定义5 · 请启用HEX发送`.
+4. Restore HEX to unchecked, send `WM_COMMAND` with `protocolui::FillSlotFirst + 4`, and assert custom slot 5 becomes the generated HEX, `ID_TX_HEX` becomes checked, the frame is not re-encoded, other editors follow the existing normal HEX conversion path, and RX/TX counters do not change.
+5. Assert `ResultLabel` is `已填入自定义5` after automatic HEX enable.
 6. Clear the generated result in a fresh process, seed clipboard, invoke Copy and FillSlot command, and assert clipboard and all custom slots stay unchanged.
 7. Set slave to `00`, click Generate, and assert the previous valid result remains while `ResultLabel` reports a non-empty error.
 
@@ -306,7 +306,7 @@ Build `protocol::Request` from the current form and call `protocol::Generate`. O
 
 - [ ] **Step 4: Implement real clipboard copy**
 
-Implement `CopyProtocolResult()` using the existing `PutClipboardText`. Empty result only updates the result-title feedback and must not call `EmptyClipboard`. Successful copy writes only normalized HEX and updates the same title.
+Implement `CopyProtocolResult()` using the existing `PutClipboardText`. Empty result only updates the result-title feedback and must not call `EmptyClipboard`. Successful copy writes only normalized HEX, enables HEX send through the existing toggle path, and updates the same title. Clipboard failure must not change the HEX setting.
 
 - [ ] **Step 5: Implement the 1–16 popup and targeted fill**
 
@@ -316,7 +316,7 @@ Implement `ShowProtocolFillMenu()` with `CreatePopupMenu`, sixteen numbered entr
 void FillProtocolResultIntoCustomSlot(int slot);
 ```
 
-The helper checks for a valid result, calls `SetWindowTextW` only for `extension::EditFirst + slot`, and relies on the existing `EN_CHANGE` path to update persistence state. It must not call `SendText`, `SendData`, `ToggleHexEditorMode`, or modify `ID_SEND_EDIT`/`ID_TX_HEX`.
+The helper checks for a valid result, calls `SetWindowTextW` only for `extension::EditFirst + slot`, and relies on the existing `EN_CHANGE` path to update persistence state. It must not call `SendText` or `SendData`. After marking the target as protocol HEX, it enables `ID_TX_HEX` through the existing toggle path so the generated frame is preserved while other editors receive the normal HEX-mode conversion.
 
 - [ ] **Step 6: Verify UI interactions GREEN**
 
@@ -327,7 +327,7 @@ cmake --build build --config Release --target ProtocolUiTests --parallel 1
 ctest --test-dir build -C Release -R "^ProtocolUi$" --output-on-failure
 ```
 
-Expected: PASS with explicit checks for generation, clipboard, targeted fill, no send, and no HEX toggle.
+Expected: PASS with explicit checks for generation, clipboard, targeted fill, no send, automatic HEX enable, and no generated-frame re-encoding.
 
 - [ ] **Step 7: Commit protocol interactions**
 
