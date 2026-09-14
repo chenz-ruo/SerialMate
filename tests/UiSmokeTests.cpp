@@ -13,6 +13,7 @@
 #include <thread>
 #include <vector>
 
+#include "ExtensionControlIds.h"
 #include "Version.h"
 
 namespace {
@@ -727,6 +728,95 @@ int wmain(int argc, wchar_t** argv) {
         PostMessageW(main, WM_CLOSE, 0, 0); cleanup(); return 16;
     }
 
+    const auto setSendOption = [&](int id, bool checked) {
+        SendMessageW(GetDlgItem(main, id), BM_SETCHECK, checked ? BST_CHECKED : BST_UNCHECKED, 0);
+        SendMessageW(main, WM_COMMAND, MAKEWPARAM(id, BN_CLICKED),
+                     reinterpret_cast<LPARAM>(GetDlgItem(main, id)));
+    };
+    const auto checkCustomLoopback = [&](const wchar_t* name, const std::wstring& customText,
+                                         const std::string& expectedHex, LRESULT expectedBytes,
+                                         int encodingIndex, bool hex, bool cr, bool lf) {
+        setSendOption(ID_TIMED, false);
+        setSendOption(ID_TX_HEX, hex);
+        setSendOption(ID_TX_CR, cr);
+        setSendOption(ID_TX_LF, lf);
+        SendMessageW(GetDlgItem(main, ID_ENCODING), CB_SETCURSEL, encodingIndex, 0);
+        SendMessageW(main, WM_COMMAND, MAKEWPARAM(ID_ENCODING, CBN_SELCHANGE),
+                     reinterpret_cast<LPARAM>(GetDlgItem(main, ID_ENCODING)));
+        SetTestValue(main, 1, hex ? L"AA" : L"主发送框保持不变");
+        const std::wstring mainBefore = WindowText(sendEdit);
+        SetTestValue(main, 100, customText);
+        const auto recordPath = outputDirectory / (std::wstring(L"custom-") + name + L".txt");
+        std::filesystem::remove(recordPath, ignored);
+        SetTestValue(main, 14, recordPath.wstring());
+        const LRESULT rxBefore = SendMessageW(main, WM_TEST_QUERY, 1, 0);
+        const LRESULT txBefore = SendMessageW(main, WM_TEST_QUERY, 2, 0);
+        Click(main, extension::SendFirst);
+        const bool received = WaitUntil([&] {
+            return SendMessageW(main, WM_TEST_QUERY, 1, 0) >= rxBefore + expectedBytes &&
+                   SendMessageW(main, WM_TEST_QUERY, 2, 0) >= txBefore + expectedBytes;
+        }, std::chrono::seconds(5));
+        SetTestValue(main, 14, L"");
+        const auto recordBytes = ReadFileBytes(recordPath);
+        const std::string record(recordBytes.begin(), recordBytes.end());
+        const bool exactCounts = SendMessageW(main, WM_TEST_QUERY, 1, 0) - rxBefore == expectedBytes &&
+                                 SendMessageW(main, WM_TEST_QUERY, 2, 0) - txBefore == expectedBytes;
+        const bool recordedBytes = record.find("TX " + expectedHex) != std::string::npos &&
+                                   record.find("RX " + expectedHex) != std::string::npos;
+        if (!received || !exactCounts || !recordedBytes || WindowText(sendEdit) != mainBefore ||
+            WindowText(GetDlgItem(main, extension::EditFirst)) != customText) {
+            std::wcerr << L"Custom send failed: " << name << L'\n';
+            return false;
+        }
+        std::wcout << L"PASS: custom data loopback " << name << L" (" << expectedBytes << L" bytes)\n";
+        return true;
+    };
+    if (!checkCustomLoopback(L"ascii", L"CUSTOM", "43 55 53 54 4F 4D", 6, 2, false, false, false) ||
+        !checkCustomLoopback(L"utf8", L"中文", "E4 B8 AD E6 96 87", 6, 0, false, false, false) ||
+        !checkCustomLoopback(L"gbk", L"中文", "D6 D0 CE C4", 4, 1, false, false, false) ||
+        !checkCustomLoopback(L"hex", L"00 01 7F 80 FE FF", "00 01 7F 80 FE FF", 6, 0, true, false, false) ||
+        !checkCustomLoopback(L"crlf", L"Z", "5A 0D 0A", 3, 0, false, true, true)) {
+        PostMessageW(main, WM_CLOSE, 0, 0); cleanup(); return 71;
+    }
+
+    setSendOption(ID_TX_HEX, false);
+    setSendOption(ID_TX_CR, false);
+    setSendOption(ID_TX_LF, false);
+    SetTestValue(main, 1, L"TIMER-MAIN");
+    SetTestValue(main, 100, L"ONE-SHOT");
+    SetTestValue(main, 2, L"1000");
+    setSendOption(ID_TIMED, true);
+    const LRESULT beforeCustomCancel = SendMessageW(main, WM_TEST_QUERY, 2, 0);
+    Click(main, extension::SendFirst);
+    if (IsDlgButtonChecked(main, ID_TIMED) != BST_UNCHECKED ||
+        WindowText(GetDlgItem(main, ID_SEND_TIMED)) != L"定时发送" ||
+        WindowText(sendEdit) != L"TIMER-MAIN" ||
+        !WaitUntil([&] { return SendMessageW(main, WM_TEST_QUERY, 2, 0) == beforeCustomCancel + 8; },
+                   std::chrono::seconds(2))) {
+        std::wcerr << L"Custom send did not cancel timed send as one-shot operation\n";
+        PostMessageW(main, WM_CLOSE, 0, 0); cleanup(); return 72;
+    }
+    std::wcout << L"PASS: custom data cancels timed send without changing main editor\n";
+
+    setSendOption(ID_TX_HEX, true);
+    SetTestValue(main, 1, L"AA");
+    SetTestValue(main, 100, L"0");
+    const LRESULT beforeInvalidCustom = SendMessageW(main, WM_TEST_QUERY, 2, 0);
+    PostMessageW(GetDlgItem(main, extension::SendFirst), BM_CLICK, 0, 0);
+    HWND customError = nullptr;
+    if (!WaitUntil([&] { customError = FindDialogForProcess(process.dwProcessId); return customError != nullptr; },
+                   std::chrono::seconds(2)) ||
+        WindowText(customError) != L"自定义数据 1 格式错误" ||
+        SendMessageW(main, WM_TEST_QUERY, 2, 0) != beforeInvalidCustom ||
+        WindowText(sendEdit) != L"AA" || WindowText(GetDlgItem(main, extension::EditFirst)) != L"0") {
+        std::wcerr << L"Invalid custom HEX did not preserve text or show slot-specific error\n";
+        if (customError) PostMessageW(customError, WM_CLOSE, 0, 0);
+        PostMessageW(main, WM_CLOSE, 0, 0); cleanup(); return 73;
+    }
+    PostMessageW(customError, WM_CLOSE, 0, 0);
+    WaitUntil([&] { return !IsWindow(customError); }, std::chrono::seconds(2));
+    std::wcout << L"PASS: invalid custom data uses slot-specific validation error\n";
+
     SendMessageW(GetDlgItem(main, ID_TX_HEX), BM_SETCHECK, BST_UNCHECKED, 0);
     SendMessageW(main, WM_COMMAND, MAKEWPARAM(ID_TX_HEX, BN_CLICKED), reinterpret_cast<LPARAM>(GetDlgItem(main, ID_TX_HEX)));
     SetTestValue(main, 1, L"TIMER");
@@ -854,8 +944,9 @@ int wmain(int argc, wchar_t** argv) {
     const BOOL exitCodeResult = GetExitCodeProcess(process.hProcess, &applicationExitCode);
     cleanup();
     if (!exitCodeResult || applicationExitCode != 0) return 14;
-    if (std::filesystem::exists(currentConfig) || std::filesystem::exists(legacyConfig)) {
-        std::wcerr << L"Application generated a configuration file during use or shutdown\n";
+    if (!std::filesystem::exists(currentConfig) || std::filesystem::exists(legacyConfig) ||
+        (GetFileAttributesW(currentConfig.c_str()) & FILE_ATTRIBUTE_HIDDEN) == 0) {
+        std::wcerr << L"Application did not persist the hidden SerialMate configuration\n";
         return 15;
     }
     const auto exportBytes = ReadFileBytes(exportPath);
@@ -896,8 +987,9 @@ int wmain(int argc, wchar_t** argv) {
         IsDlgButtonChecked(restarted, ID_TX_CR) != BST_UNCHECKED ||
         IsDlgButtonChecked(restarted, ID_TX_LF) != BST_UNCHECKED ||
         IsDlgButtonChecked(restarted, ID_TIMED) != BST_UNCHECKED ||
-        SendMessageW(restarted, WM_TEST_QUERY, 10, 0) != 0) {
-        std::wcerr << L"Restart did not restore the required stateless defaults\n";
+        SendMessageW(restarted, WM_TEST_QUERY, 10, 0) != 0 ||
+        WindowText(GetDlgItem(restarted, extension::EditFirst)) != L"0") {
+        std::wcerr << L"Restart did not preserve custom data with all other settings stateless\n";
         if (restarted) PostMessageW(restarted, WM_CLOSE, 0, 0);
         WaitForSingleObject(restartProcess.hProcess, 2000);
         CloseHandle(restartProcess.hProcess);
@@ -911,12 +1003,12 @@ int wmain(int argc, wchar_t** argv) {
         return 66;
     }
     CloseHandle(restartProcess.hProcess);
-    if (std::filesystem::exists(currentConfig) || std::filesystem::exists(legacyConfig)) {
-        std::wcerr << L"Restart generated a configuration file\n";
+    if (!std::filesystem::exists(currentConfig) || std::filesystem::exists(legacyConfig)) {
+        std::wcerr << L"Restart did not retain the SerialMate configuration\n";
         return 67;
     }
     RestoreClipboard(originalClipboard);
-    std::wcout << L"PASS: graceful exit, no configuration files, stateless restart defaults\n";
+    std::wcout << L"PASS: graceful exit, hidden custom-data configuration, stateless restart defaults\n";
     std::wcout << L"PASS: UTF-8 logs and exported communication record\n";
     std::wcout << L"All UI smoke tests passed.\n";
     return 0;

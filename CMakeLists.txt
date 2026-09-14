@@ -32,6 +32,8 @@ add_executable(SerialMate WIN32
     src/CommRecord.h
     src/CommView.cpp
     src/CommView.h
+    src/ConfigStore.cpp
+    src/ConfigStore.h
     src/UpdateChecker.cpp
     src/UpdateChecker.h
     src/UpdateInstaller.cpp
@@ -85,7 +87,7 @@ endif()
 
 add_executable(UiSmokeTests tests/UiSmokeTests.cpp)
 target_compile_definitions(UiSmokeTests PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
-target_include_directories(UiSmokeTests PRIVATE ${GENERATED_DIR})
+target_include_directories(UiSmokeTests PRIVATE ${GENERATED_DIR} src)
 target_compile_options(UiSmokeTests PRIVATE /W4 /permissive- /utf-8 /EHsc)
 if(MSVC)
     set_property(TARGET UiSmokeTests PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
@@ -258,7 +260,32 @@ if(MSVC)
     set_property(TARGET AdaptiveRecordLayoutTests PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 endif()
 
+add_executable(ConfigStoreTests
+    tests/ConfigStoreTests.cpp
+    src/ConfigStore.cpp
+    src/ConfigStore.h
+)
+target_compile_definitions(ConfigStoreTests PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+target_include_directories(ConfigStoreTests PRIVATE src)
+target_compile_options(ConfigStoreTests PRIVATE /W4 /permissive- /utf-8 /EHsc)
+target_link_libraries(ConfigStoreTests PRIVATE shell32 ole32)
+if(MSVC)
+    set_property(TARGET ConfigStoreTests PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+endif()
+
+add_executable(CustomDataPersistenceTests tests/CustomDataPersistenceTests.cpp)
+target_compile_definitions(CustomDataPersistenceTests PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+target_include_directories(CustomDataPersistenceTests PRIVATE src)
+target_compile_options(CustomDataPersistenceTests PRIVATE /W4 /permissive- /utf-8 /EHsc)
+add_dependencies(CustomDataPersistenceTests SerialMate)
+if(MSVC)
+    set_property(TARGET CustomDataPersistenceTests PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+endif()
+
 enable_testing()
+add_test(NAME ConfigStore COMMAND ConfigStoreTests)
+add_test(NAME CustomDataPersistence COMMAND CustomDataPersistenceTests $<TARGET_FILE:SerialMate>)
+set_tests_properties(CustomDataPersistence PROPERTIES TIMEOUT 30 RUN_SERIAL TRUE)
 add_test(NAME ResponsiveUi COMMAND ResponsiveUiTests $<TARGET_FILE:SerialMate>)
 set_tests_properties(ResponsiveUi PROPERTIES TIMEOUT 60 RUN_SERIAL TRUE)
 add_test(NAME AdaptiveRecordLayout COMMAND AdaptiveRecordLayoutTests)

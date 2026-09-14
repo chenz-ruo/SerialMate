@@ -16,6 +16,7 @@
 #include "Version.h"
 #include "CommRecord.h"
 #include "CommView.h"
+#include "ConfigStore.h"
 #include "TextCodec.h"
 #include "UiGeometry.h"
 #include "ExtensionControlIds.h"
@@ -24,6 +25,7 @@
 
 #include <algorithm>
 #include <array>
+#include <bitset>
 #include <atomic>
 #include <chrono>
 #include <cstdint>
@@ -276,11 +278,15 @@ private:
     HWND Combo(int id);
     void AddComboItems(HWND combo, std::initializer_list<const wchar_t*> items, int selected);
     void ScanPorts(bool preserve);
+    void LoadConfiguration();
+    void SaveConfiguration();
     void SetTextEncoding(textcodec::TextEncoding encoding);
     void FlushRxPending();
     void OpenPort();
     void ClosePort(bool showRecord = true);
-    bool BuildSendData(std::vector<std::uint8_t>& data, bool fromTimer = false);
+    bool BuildSendDataFromText(const std::wstring& text, std::vector<std::uint8_t>& data,
+                               bool fromTimer = false, int customSlot = -1);
+    void SendText(const std::wstring& text, bool fromTimer = false, int customSlot = -1);
     void SendData(bool fromTimer = false);
     void StopTimedSendOnError(const std::wstring& reason);
     void ToggleHexEditorMode();
@@ -329,6 +335,11 @@ private:
     bool normalizingHex_ = false;
     std::vector<std::uint8_t> sendRawSnapshot_;
     MainLayoutGeometry layout_{};
+    std::unique_ptr<config::ConfigStore> configStore_;
+    config::ConfigData customData_{};
+    std::bitset<config::kSlotCount> customDataDirty_{};
+    bool loadingConfiguration_ = false;
+    bool configurationSaved_ = false;
 };
 
 HWND Application::Make(const wchar_t* cls, const wchar_t* text, DWORD style, DWORD exStyle, int id) {
@@ -438,6 +449,7 @@ void Application::Create() {
         ShowWindow(edit, SW_HIDE);
         ShowWindow(send, SW_HIDE);
     }
+    LoadConfiguration();
     Label(L"●  未连接", ID_STATUS_LEFT);
     auto statusRight = Label(L"RX: 0    TX: 0", ID_STATUS_RIGHT);
     SetWindowLongPtrW(statusRight, GWL_STYLE, GetWindowLongPtrW(statusRight, GWL_STYLE) | SS_RIGHT);
@@ -613,6 +625,31 @@ void Application::Layout() {
 bool Application::Checked(int id) const { return IsDlgButtonChecked(window_, id) == BST_CHECKED; }
 int Application::ComboSelection(int id) const { return static_cast<int>(SendMessageW(Get(id), CB_GETCURSEL, 0, 0)); }
 
+void Application::LoadConfiguration() {
+    try {
+        configStore_ = std::make_unique<config::ConfigStore>(config::ConfigStore::OpenDefault());
+        customData_ = configStore_->InitialData();
+        loadingConfiguration_ = true;
+        for (std::size_t index = 0; index < config::kSlotCount; ++index)
+            SetWindowTextW(Get(extension::EditFirst + static_cast<int>(index)),
+                           customData_.customData[index].c_str());
+        loadingConfiguration_ = false;
+    } catch (...) {
+        loadingConfiguration_ = false;
+        configStore_.reset();
+    }
+}
+
+void Application::SaveConfiguration() {
+    if (configurationSaved_) return;
+    configurationSaved_ = true;
+    if (!configStore_) return;
+    std::wstring error;
+    if (configStore_->SaveMerged(customData_, customDataDirty_, error)) return;
+    if (logWriter_) logWriter_->Write("[WARNING] Custom data configuration save failed.\r\n");
+    MessageBoxW(window_, L"自定义数据配置保存失败。", L"配置保存失败", MB_OK | MB_ICONWARNING);
+}
+
 void Application::SetTextEncoding(textcodec::TextEncoding encoding) {
     DrainReceive();
     FlushRxPending();
@@ -746,20 +783,23 @@ void Application::StopTimedSendOnError(const std::wstring& reason) {
     MessageBoxW(window_, (L"定时发送已停止：\r\n" + detail).c_str(), L"定时发送", MB_OK | MB_ICONWARNING);
 }
 
-bool Application::BuildSendData(std::vector<std::uint8_t>& data, bool fromTimer) {
-    std::wstring text = WindowText(Get(ID_SEND_EDIT));
+bool Application::BuildSendDataFromText(const std::wstring& text, std::vector<std::uint8_t>& data,
+                                        bool fromTimer, int customSlot) {
+    const std::wstring errorTitle = customSlot >= 0
+        ? L"自定义数据 " + std::to_wstring(customSlot + 1) + L" 格式错误"
+        : L"发送内容错误";
     if (Checked(ID_TX_HEX)) {
         std::wstring error;
         if (!util::ParseHex(text, data, error)) {
             if (fromTimer) StopTimedSendOnError(error);
-            else MessageBoxW(window_, error.c_str(), L"发送内容错误", MB_OK | MB_ICONWARNING);
+            else MessageBoxW(window_, error.c_str(), errorTitle.c_str(), MB_OK | MB_ICONWARNING);
             return false;
         }
     } else {
         std::wstring error;
         if (!textcodec::Encode(text, encoding_, data, error)) {
             if (fromTimer) StopTimedSendOnError(error);
-            else MessageBoxW(window_, error.c_str(), L"发送内容错误", MB_OK | MB_ICONWARNING);
+            else MessageBoxW(window_, error.c_str(), errorTitle.c_str(), MB_OK | MB_ICONWARNING);
             return false;
         }
     }
@@ -800,7 +840,7 @@ void Application::ToggleHexEditorMode() {
     }
 }
 
-void Application::SendData(bool fromTimer) {
+void Application::SendText(const std::wstring& text, bool fromTimer, int customSlot) {
     if (!fromTimer && Checked(ID_TIMED)) {
         CheckDlgButton(window_, ID_TIMED, BST_UNCHECKED);
         SendMessageW(window_, WM_COMMAND, MAKEWPARAM(ID_TIMED, BN_CLICKED), reinterpret_cast<LPARAM>(Get(ID_TIMED)));
@@ -816,7 +856,7 @@ void Application::SendData(bool fromTimer) {
         return;
     }
     std::vector<std::uint8_t> data;
-    if (!BuildSendData(data, fromTimer)) return;
+    if (!BuildSendDataFromText(text, data, fromTimer, customSlot)) return;
     if (!serial_.Send(data)) {
         if (fromTimer) StopTimedSendOnError(L"发送队列已满或串口不可用。");
         else MessageBoxW(window_, L"发送队列已满或串口不可用。", L"发送失败", MB_OK | MB_ICONWARNING);
@@ -824,6 +864,10 @@ void Application::SendData(bool fromTimer) {
     }
     txBytes_ += data.size();
     AppendRecord(false, data);
+}
+
+void Application::SendData(bool fromTimer) {
+    SendText(WindowText(Get(ID_SEND_EDIT)), fromTimer);
 }
 
 void Application::AppendSystem(const std::wstring& text, bool error) {
@@ -990,13 +1034,17 @@ bool Application::LoadFilePath(const std::wstring& path) {
 
 void Application::Command(int id, int notification, HWND) {
     if (id == ID_SEND_EDIT && notification == EN_CHANGE) { NormalizeHexEditor(); return; }
+    if (id >= extension::EditFirst && id < extension::EditFirst + kMaximumStoredCustomSlots &&
+        notification == EN_CHANGE) {
+        const std::size_t slot = static_cast<std::size_t>(id - extension::EditFirst);
+        customData_.customData[slot] = WindowText(Get(id));
+        if (!loadingConfiguration_) customDataDirty_.set(slot);
+        return;
+    }
     if (id >= extension::SendFirst && id < extension::SendFirst + kMaximumStoredCustomSlots &&
         notification == BN_CLICKED) {
         const int slot = id - extension::SendFirst;
-        const std::wstring old = WindowText(Get(ID_SEND_EDIT));
-        SetWindowTextW(Get(ID_SEND_EDIT), WindowText(Get(extension::EditFirst + slot)).c_str());
-        SendData();
-        SetWindowTextW(Get(ID_SEND_EDIT), old.c_str());
+        SendText(WindowText(Get(extension::EditFirst + slot)), false, slot);
         return;
     }
     switch (id) {
@@ -1196,6 +1244,7 @@ void Application::Paint() {
 
 void Application::Shutdown() {
     if (shuttingDown_) return; shuttingDown_ = true;
+    SaveConfiguration();
     KillTimer(window_, TIMER_SEND); KillTimer(window_, TIMER_STATS); KillTimer(window_, TIMER_RECORD_VIEW);
     updateChecker_.Stop();
     const auto closeResult = serial_.Close();
@@ -1295,6 +1344,12 @@ void Application::SetTestValue(ULONG_PTR key, const wchar_t* value) {
     else if (key == 14) {
         recorder_->Stop();
         if (*value) recorder_->Start(value);
+    }
+    else if (key >= 100 && key < 100 + config::kSlotCount) {
+        const std::size_t slot = static_cast<std::size_t>(key - 100);
+        SetWindowTextW(Get(extension::EditFirst + static_cast<int>(slot)), value);
+        customData_.customData[slot] = WindowText(Get(extension::EditFirst + static_cast<int>(slot)));
+        customDataDirty_.set(slot);
     }
 }
 
