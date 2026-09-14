@@ -28,6 +28,10 @@ add_executable(SerialMate WIN32
     src/SerialPortInfo.h
     src/RxIngressQueue.cpp
     src/RxIngressQueue.h
+    src/ProtocolGenerator.cpp
+    src/ProtocolGenerator.h
+    src/ModbusRtuGenerator.cpp
+    src/ModbusRtuGenerator.h
     src/CommRecord.cpp
     src/CommRecord.h
     src/CommView.cpp
@@ -282,7 +286,22 @@ if(MSVC)
     set_property(TARGET CustomDataPersistenceTests PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 endif()
 
+add_executable(ProtocolGeneratorTests
+    tests/ProtocolGeneratorTests.cpp
+    src/ProtocolGenerator.cpp
+    src/ProtocolGenerator.h
+    src/ModbusRtuGenerator.cpp
+    src/ModbusRtuGenerator.h
+)
+target_compile_definitions(ProtocolGeneratorTests PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+target_include_directories(ProtocolGeneratorTests PRIVATE src)
+target_compile_options(ProtocolGeneratorTests PRIVATE /W4 /permissive- /utf-8 /EHsc)
+if(MSVC)
+    set_property(TARGET ProtocolGeneratorTests PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+endif()
+
 enable_testing()
+add_test(NAME ProtocolGenerator COMMAND ProtocolGeneratorTests)
 add_test(NAME ConfigStore COMMAND ConfigStoreTests)
 add_test(NAME CustomDataPersistence COMMAND CustomDataPersistenceTests $<TARGET_FILE:SerialMate>)
 set_tests_properties(CustomDataPersistence PROPERTIES TIMEOUT 30 RUN_SERIAL TRUE)
