@@ -682,7 +682,7 @@ void Application::LayoutProtocolControls() {
     move(protocolui::TypeCombo, left + typeLabelWidth, y, width - typeLabelWidth, comboRowHeight);
     y += comboRowHeight + rowGap;
 
-    const int slaveLabelWidth = scale(62);
+    const int slaveLabelWidth = typeLabelWidth;
     const int slaveEditWidth = scale(44);
     const int functionLabelWidth = scale(54);
     move(protocolui::SlaveLabel, left, y, slaveLabelWidth, comboRowHeight);
@@ -735,6 +735,10 @@ void Application::UpdateProtocolForm() {
                    function == protocol::Function::WriteSingleRegister ? L"写入值" : L"寄存器数量");
     LayoutProtocolControls();
     SetProtocolControlsVisible(layout_.extensionVisible);
+    if (!IsRectEmpty(&layout_.protocolCard)) {
+        RedrawWindow(window_, &layout_.protocolCard, nullptr,
+                     RDW_INVALIDATE | RDW_ERASE | RDW_UPDATENOW | RDW_ALLCHILDREN);
+    }
 }
 
 void Application::UpdateProtocolFeedback(const std::wstring& text) {

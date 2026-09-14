@@ -50,6 +50,37 @@ bool Contains(const RECT& outer, const RECT& inner) {
            inner.bottom <= outer.bottom;
 }
 
+std::vector<std::uint32_t> CapturePixels(HWND window, const RECT& rect) {
+    const int width = rect.right - rect.left;
+    const int height = rect.bottom - rect.top;
+    HDC source = GetDC(window);
+    Check(source != nullptr, "cannot get window DC for protocol repaint check");
+    HDC memory = CreateCompatibleDC(source);
+    HBITMAP bitmap = CreateCompatibleBitmap(source, width, height);
+    Check(memory != nullptr && bitmap != nullptr,
+          "cannot create bitmap for protocol repaint check");
+    const HGDIOBJ oldBitmap = SelectObject(memory, bitmap);
+    Check(BitBlt(memory, 0, 0, width, height, source, rect.left, rect.top, SRCCOPY) != FALSE,
+          "cannot capture protocol Card pixels");
+
+    BITMAPINFO info{};
+    info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    info.bmiHeader.biWidth = width;
+    info.bmiHeader.biHeight = -height;
+    info.bmiHeader.biPlanes = 1;
+    info.bmiHeader.biBitCount = 32;
+    info.bmiHeader.biCompression = BI_RGB;
+    std::vector<std::uint32_t> pixels(static_cast<std::size_t>(width) * height);
+    Check(GetDIBits(memory, bitmap, 0, static_cast<UINT>(height), pixels.data(), &info,
+                    DIB_RGB_COLORS) == height,
+          "cannot read protocol Card pixels");
+    SelectObject(memory, oldBitmap);
+    DeleteObject(bitmap);
+    DeleteDC(memory);
+    ReleaseDC(window, source);
+    return pixels;
+}
+
 struct TestProcess {
     PROCESS_INFORMATION process{};
     HWND window = nullptr;
@@ -221,6 +252,9 @@ void CheckForm(HWND window) {
                     "protocol action buttons are not vertically aligned");
     CheckRowAligned(protocolui::ResultEdit, protocolui::Copy,
                     "protocol result edit and copy button are not vertically aligned");
+    Check(ChildRect(window, GetDlgItem(window, protocolui::SlaveEdit)).left ==
+              ChildRect(window, GetDlgItem(window, protocolui::AddressEdit)).left,
+          "slave and address edits do not share the same left edge");
 
     for (int index : {0, 1}) {
         SelectFunction(window, index);
@@ -272,6 +306,22 @@ void CheckInteractions(HWND window) {
     Check(Text(GetDlgItem(window, protocolui::ResultLabel)) ==
               L"生成结果 · 8 bytes · CRC C4 0B",
           "generated frame status is incorrect");
+
+    RECT client{};
+    GetClientRect(window, &client);
+    const auto geometry = CalculateMainLayoutGeometry(client.right, client.bottom,
+                                                       GetDpiForWindow(window),
+                                                       static_cast<int>(Message(window, kQuery, 51)));
+    SelectFunction(window, 3);
+    GdiFlush();
+    const auto switchedPixels = CapturePixels(window, geometry.protocolCard);
+    Check(RedrawWindow(window, &geometry.protocolCard, nullptr,
+                       RDW_INVALIDATE | RDW_ERASE | RDW_UPDATENOW | RDW_ALLCHILDREN) != FALSE,
+          "cannot force protocol Card reference redraw");
+    GdiFlush();
+    Check(switchedPixels == CapturePixels(window, geometry.protocolCard),
+          "function switch leaves stale pixels in protocol Card");
+    SelectFunction(window, 0);
 
     PutClipboard(L"OLD");
     Click(window, protocolui::Copy);
