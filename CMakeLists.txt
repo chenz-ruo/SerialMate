@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.21)
-project(SerialMate VERSION 1.1.0 LANGUAGES CXX RC)
+project(SerialMate VERSION 1.1.1 LANGUAGES CXX RC)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -23,6 +23,7 @@ add_executable(SerialMate WIN32
     src/TextCodec.cpp
     src/TextCodec.h
     src/UiGeometry.h
+    src/ExtensionControlIds.h
     src/SerialPortInfo.cpp
     src/SerialPortInfo.h
     src/RxIngressQueue.cpp
@@ -235,7 +236,32 @@ if(MSVC)
     set_property(TARGET UiGeometryTests PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 endif()
 
+add_executable(ResponsiveUiTests tests/ResponsiveUiTests.cpp)
+target_compile_definitions(ResponsiveUiTests PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+target_include_directories(ResponsiveUiTests PRIVATE src)
+target_compile_options(ResponsiveUiTests PRIVATE /W4 /permissive- /utf-8 /EHsc)
+add_dependencies(ResponsiveUiTests SerialMate)
+if(MSVC)
+    set_property(TARGET ResponsiveUiTests PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+endif()
+
+add_executable(AdaptiveRecordLayoutTests
+    tests/AdaptiveRecordLayoutTests.cpp
+    src/CommView.cpp
+    src/CommRecord.cpp
+    src/TextCodec.cpp
+)
+target_compile_definitions(AdaptiveRecordLayoutTests PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+target_include_directories(AdaptiveRecordLayoutTests PRIVATE src)
+target_compile_options(AdaptiveRecordLayoutTests PRIVATE /W4 /permissive- /utf-8 /EHsc)
+if(MSVC)
+    set_property(TARGET AdaptiveRecordLayoutTests PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+endif()
+
 enable_testing()
+add_test(NAME ResponsiveUi COMMAND ResponsiveUiTests $<TARGET_FILE:SerialMate>)
+set_tests_properties(ResponsiveUi PROPERTIES TIMEOUT 60 RUN_SERIAL TRUE)
+add_test(NAME AdaptiveRecordLayout COMMAND AdaptiveRecordLayoutTests)
 add_test(NAME Utilities COMMAND SerialMateTests)
 add_test(NAME UpdateCheckerCancellation COMMAND UpdateCheckerTests)
 add_test(NAME UpdateInstaller COMMAND UpdateInstallerTests)

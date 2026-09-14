@@ -134,7 +134,7 @@ void CheckLengthRows() {
         comm::RecordBuffer buffer;
         buffer.Add(comm::Direction::Tx, L"T", Bytes(length));
         const std::size_t expected = (length + comm::kBytesPerRow - 1) / comm::kBytesPerRow;
-        Check(buffer.RowCount() == expected, L"16字节边界行数");
+        Check(buffer.RowCount() == expected, L"自适应边界行数");
         for (std::size_t rowIndex = 0; rowIndex < expected; ++rowIndex) {
             const auto row = buffer.RowAt(rowIndex);
             Check(row.has_value() && row->offset == rowIndex * comm::kBytesPerRow,
@@ -180,14 +180,14 @@ void CheckRecordView() {
     SetWindowPos(window, nullptr, 0, 0, logicalWidth(1100), 220, SWP_NOZORDER | SWP_NOACTIVATE);
     Check(view.BytesPerRow() >= 12, L"较宽窗口提升到12字节");
     SetWindowPos(window, nullptr, 0, 0, logicalWidth(1400), 220, SWP_NOZORDER | SWP_NOACTIVATE);
-    Check(view.BytesPerRow() == 16, L"宽窗口保持16字节");
+    Check(view.BytesPerRow() == 32, L"超宽窗口提升到32字节");
     SetWindowPos(window, nullptr, 0, 0, logicalWidth(900), 220, SWP_NOZORDER | SWP_NOACTIVATE);
 
     view.SelectRow(1);
     Check(view.SelectedCount() == 1, L"select-continuation");
     const auto selectedFull = view.Copy(comm::CopyFormat::Full, true);
-    Check(selectedFull.find(L"[2026-09-12 08:25:15.139]") != std::wstring::npos, L"copy-full-selected");
-    Check(CountText(selectedFull, L"[2026-09-12 08:25:15.139]") == 1, L"copy-timestamp-once");
+    Check(selectedFull.find(L"[08:25:15.1]") != std::wstring::npos, L"copy-full-selected");
+    Check(CountText(selectedFull, L"[08:25:15.1]") == 1, L"copy-timestamp-once");
     Check(selectedFull.find(L"│ ABCDEFGHIJKLMNOP") != std::wstring::npos, L"copy-hex-ascii");
     Check(view.Copy(comm::CopyFormat::Hex, true).find(L"41 42 43") != std::wstring::npos, L"copy-hex-selected");
     Check(view.Copy(comm::CopyFormat::Text, true).find(L"ABC") != std::wstring::npos, L"copy-text-selected");
@@ -250,20 +250,20 @@ void CheckRecordView() {
               L"dpi-metrics");
         if (previousCell) Check(view.CharacterWidth() >= previousCell, L"dpi-monotonic");
         previousCell = view.CharacterWidth();
-        bool saw8 = false, saw12 = false, saw16 = false, keptTextVisible = true;
+        bool saw8 = false, saw16 = false, saw32 = false, keptTextVisible = true;
         for (int logical = 560; logical <= 1400; logical += 10) {
             SetWindowPos(window, nullptr, 0, 0, MulDiv(logical, dpi, 96), 220,
                          SWP_NOZORDER | SWP_NOACTIVATE);
             saw8 = saw8 || view.BytesPerRow() == 8;
-            saw12 = saw12 || view.BytesPerRow() == 12;
             saw16 = saw16 || view.BytesPerRow() == 16;
+            saw32 = saw32 || view.BytesPerRow() == 32;
             RECT adaptiveClient{};
             GetClientRect(window, &adaptiveClient);
             if (view.BytesPerRow() >= 8 && view.ContentWidth() > adaptiveClient.right) {
                 keptTextVisible = false;
             }
         }
-        Check(saw8 && saw12 && saw16, L"16/12/8字节宽度自适应");
+        Check(saw8 && saw16 && saw32, L"32/16/8字节宽度自适应");
         Check(keptTextVisible, L"自适应尺寸下TEXT始终位于客户区");
     }
     SetWindowPos(window, nullptr, 0, 0, 180, 120, SWP_NOZORDER | SWP_NOACTIVATE);
@@ -297,10 +297,10 @@ void CheckSystemRecordAlignment() {
     Check(first >= 2 && first < 48, L"system-record-left-aligned");
     const int second = FirstDarkPixelInRow(window, view.RowHeight() + 8, view.RowHeight() * 2 + 8);
     Check(second >= 2 && second < 48, L"system-error-left-aligned");
-    Check(view.Copy(comm::CopyFormat::Full, false).find(L"[2026-09-12 11:24:23.341]") != std::wstring::npos,
+    Check(view.Copy(comm::CopyFormat::Full, false).find(L"[11:24:23.3]") != std::wstring::npos,
           L"系统消息显示时间戳");
     view.SetTimestamps(false);
-    Check(view.Copy(comm::CopyFormat::Full, false).find(L"[2026-09-12 11:24:23.341]") == std::wstring::npos,
+    Check(view.Copy(comm::CopyFormat::Full, false).find(L"[11:24:23.3]") == std::wstring::npos,
           L"系统消息时间戳可完全隐藏");
     DestroyWindow(window);
     DestroyWindow(parent);

@@ -18,6 +18,7 @@
 #include "CommView.h"
 #include "TextCodec.h"
 #include "UiGeometry.h"
+#include "ExtensionControlIds.h"
 #include "SerialPortInfo.h"
 #include "RxIngressQueue.h"
 
@@ -160,20 +161,40 @@ std::wstring ChoosePath(HWND owner, bool save, const wchar_t* title, const wchar
     return ok ? std::wstring(file.data()) : std::wstring();
 }
 
+void DrawFlatEditBorder(HWND window) {
+    HDC dc = GetWindowDC(window);
+    if (!dc) return;
+    RECT rect{};
+    GetWindowRect(window, &rect);
+    OffsetRect(&rect, -rect.left, -rect.top);
+    HPEN pen = CreatePen(PS_SOLID, 1, RGB(205, 215, 225));
+    HGDIOBJ oldPen = SelectObject(dc, pen);
+    HGDIOBJ oldBrush = SelectObject(dc, GetStockObject(HOLLOW_BRUSH));
+    Rectangle(dc, 0, 0, rect.right, rect.bottom);
+    SelectObject(dc, oldBrush);
+    SelectObject(dc, oldPen);
+    DeleteObject(pen);
+    ReleaseDC(window, dc);
+}
+
+LRESULT CALLBACK FlatEditSubclass(HWND window, UINT message, WPARAM wParam, LPARAM lParam,
+                                  UINT_PTR subclassId, DWORD_PTR) {
+    if (message == WM_PAINT || message == WM_NCPAINT) {
+        const LRESULT result = DefSubclassProc(window, message, wParam, lParam);
+        DrawFlatEditBorder(window);
+        return result;
+    }
+    if (message == WM_NCDESTROY) RemoveWindowSubclass(window, FlatEditSubclass, subclassId);
+    return DefSubclassProc(window, message, wParam, lParam);
+}
+
 LRESULT CALLBACK SendEditSubclass(HWND window, UINT message, WPARAM wParam, LPARAM lParam,
                                   UINT_PTR subclassId, DWORD_PTR) {
     HWND parent = GetParent(window);
     const bool hexMode = parent && IsDlgButtonChecked(parent, ID_TX_HEX) == BST_CHECKED;
-    if (message == WM_PAINT) {
+    if (message == WM_PAINT || message == WM_NCPAINT) {
         const LRESULT result = DefSubclassProc(window, message, wParam, lParam);
-        HDC dc = GetWindowDC(window); RECT r{}; GetWindowRect(window, &r); OffsetRect(&r, -r.left, -r.top);
-        if (dc) { HPEN p = CreatePen(PS_SOLID, 1, RGB(205, 215, 225)); HGDIOBJ old = SelectObject(dc, p); SelectObject(dc, GetStockObject(HOLLOW_BRUSH)); Rectangle(dc, 0, 0, r.right, r.bottom); SelectObject(dc, old); DeleteObject(p); ReleaseDC(window, dc); }
-        return result;
-    }
-    if (message == WM_NCPAINT) {
-        const LRESULT result = DefSubclassProc(window, message, wParam, lParam);
-        HDC dc = GetWindowDC(window);
-        if (dc) { RECT r{}; GetWindowRect(window, &r); OffsetRect(&r, -r.left, -r.top); HPEN p = CreatePen(PS_SOLID, 1, RGB(205, 215, 225)); HGDIOBJ old = SelectObject(dc, p); SelectObject(dc, GetStockObject(HOLLOW_BRUSH)); Rectangle(dc, 0, 0, r.right, r.bottom); SelectObject(dc, old); DeleteObject(p); ReleaseDC(window, dc); }
+        DrawFlatEditBorder(window);
         return result;
     }
     if (hexMode && message == WM_CHAR) {
@@ -232,6 +253,7 @@ public:
 
     void Create();
     void Layout();
+    int DefaultClientWidth() const { return layout_.defaultClientWidth; }
     void Command(int id, int notification, HWND sender);
     void Timer(UINT_PTR id);
     void DeviceChanged();
@@ -306,9 +328,7 @@ private:
     comm::RecordView recordView_{records_};
     bool normalizingHex_ = false;
     std::vector<std::uint8_t> sendRawSnapshot_;
-    SettingsGeometry settingsGeometry_{};
-    RECT logCard_{};
-    RECT sendCard_{};
+    MainLayoutGeometry layout_{};
 };
 
 HWND Application::Make(const wchar_t* cls, const wchar_t* text, DWORD style, DWORD exStyle, int id) {
@@ -377,7 +397,8 @@ void Application::Create() {
     Label(L"发送设置", 9003); SetFont(Get(9003), titleFont_);
     Check(L"十六进制发送", ID_TX_HEX); Check(L"发送新行 (CR)", ID_TX_CR);
     Check(L"发送新行 (LF)", ID_TX_LF); Check(L"定时发送", ID_TIMED);
-    auto interval = Make(L"EDIT", L"1000", ES_NUMBER | ES_CENTER | WS_TABSTOP, WS_EX_CLIENTEDGE, ID_INTERVAL);
+    auto interval = Make(L"EDIT", L"1000", ES_NUMBER | ES_CENTER | WS_TABSTOP, 0, ID_INTERVAL);
+    SetWindowSubclass(interval, FlatEditSubclass, 1, 0);
     SendMessageW(interval, EM_SETLIMITTEXT, 7, 0); Label(L"ms", 9010);
     Label(L"文本编码（发送/显示）", 9011); auto encoding = Combo(ID_ENCODING);
     AddComboItems(encoding, {textcodec::Name(textcodec::TextEncoding::Utf8),
@@ -389,6 +410,12 @@ void Application::Create() {
     Button(L"复制 ▼", ID_COPY_ALL); Button(L"清空", ID_CLEAR_LOG);
     Button(L"导出...", ID_EXPORT);
     recordView_.Create(window_, ID_LOG_VIEW);
+    Label(L"自定义数据", extension::CustomTitle); SetFont(Get(extension::CustomTitle), titleFont_);
+    Label(L"协议数据生成", extension::ProtocolTitle); SetFont(Get(extension::ProtocolTitle), titleFont_);
+    for (int id : {extension::CustomTitle, extension::ProtocolTitle})
+        SetWindowLongPtrW(Get(id), GWL_STYLE, GetWindowLongPtrW(Get(id), GWL_STYLE) | SS_ENDELLIPSIS);
+    ShowWindow(Get(extension::CustomTitle), SW_HIDE);
+    ShowWindow(Get(extension::ProtocolTitle), SW_HIDE);
 
     Label(L"数据发送", 9005); SetFont(Get(9005), titleFont_);
     auto sendEdit = Make(L"EDIT", L"", ES_MULTILINE | ES_AUTOVSCROLL | WS_VSCROLL | WS_TABSTOP,
@@ -398,6 +425,19 @@ void Application::Create() {
     SetWindowSubclass(sendEdit, SendEditSubclass, 1, 0);
     Button(L"发送（Enter）", ID_SEND, true); Button(L"加载文件...", ID_LOAD_FILE);
     Button(L"定时发送", ID_SEND_TIMED); Button(L"清空", ID_CLEAR_SEND);
+    // Create every slot once. Its HWND and text survive all layout transitions.
+    for (int i = 0; i < kMaximumStoredCustomSlots; ++i) {
+        const auto number = std::to_wstring(i + 1);
+        HWND index = Label(number.c_str(), extension::IndexFirst + i);
+        SetWindowLongPtrW(index, GWL_STYLE, GetWindowLongPtrW(index, GWL_STYLE) | SS_CENTERIMAGE);
+        HWND edit = Make(L"EDIT", L"", ES_AUTOHSCROLL | WS_TABSTOP, 0, extension::EditFirst + i);
+        SetWindowSubclass(edit, FlatEditSubclass, 1, 0);
+        HWND send = Button(L"发送", extension::SendFirst + i);
+        SendMessageW(edit, EM_SETLIMITTEXT, 4096, 0);
+        ShowWindow(index, SW_HIDE);
+        ShowWindow(edit, SW_HIDE);
+        ShowWindow(send, SW_HIDE);
+    }
     Label(L"●  未连接", ID_STATUS_LEFT);
     auto statusRight = Label(L"RX: 0    TX: 0", ID_STATUS_RIGHT);
     SetWindowLongPtrW(statusRight, GWL_STYLE, GetWindowLongPtrW(statusRight, GWL_STYLE) | SS_RIGHT);
@@ -428,31 +468,33 @@ void Application::Layout() {
     RECT client{}; GetClientRect(window_, &client);
     const int width = client.right;
     const int height = client.bottom;
-    constexpr int pad = 20;
-    constexpr int gap = 12;
-    constexpr int top = 16;
-    constexpr int statusH = 40;
-    const auto geometry = CalculateMainLayoutGeometry(width, height, GetDpiForWindow(window_));
-    settingsGeometry_ = geometry.settings;
-    logCard_ = geometry.commRecordCard;
-    sendCard_ = geometry.dataSendCard;
+    const UINT dpi = GetDpiForWindow(window_);
+    const auto scale = [dpi](int value) { return MulDiv(value, static_cast<int>(dpi), 96); };
+    recordView_.SetDpi(dpi);
+    layout_ = CalculateMainLayoutGeometry(width, height, dpi, recordView_.MinimumContentWidth8());
+    auto& geometry = layout_;
+    auto& settingsGeometry_ = layout_.settings;
+    const auto& logCard_ = layout_.commRecordCard;
+    const auto& sendCard_ = layout_.dataSendCard;
+    const int pad = geometry.serialColumn.left;
+    const int gap = geometry.horizontalGap;
+    const int statusH = scale(40);
     const int rightX = geometry.rightX;
     const int rightW = geometry.rightWidth;
     // RecordView owns the canonical monospace HFONT and recreates it when the
     // DPI changes. Re-apply that same handle to the send editor on every
     // layout pass so both text areas stay identical after a DPI transition.
     if (Get(ID_SEND_EDIT) && recordView_.Font()) SetFont(Get(ID_SEND_EDIT), recordView_.Font());
-    MoveWindow(Get(ID_OPEN), pad, top, 184, 52, TRUE);
-    MoveWindow(Get(ID_CLOSE), pad + 200, top, 164, 52, TRUE);
-    int menuX = width - pad;
-    const std::array<std::pair<int, int>, 3> menu{{{ID_ABOUT, 98}, {ID_LOG, 112}, {ID_NEW, 130}}};
-    for (const auto& [id, w] : menu) { menuX -= w; MoveWindow(Get(id), menuX, top, w, 52, TRUE); menuX -= 10; }
-
     const auto moveRect = [&](HWND control, const RECT& rect) {
         if (!control) return;
         MoveWindow(control, rect.left, rect.top, rect.right - rect.left,
                    rect.bottom - rect.top, TRUE);
     };
+    moveRect(Get(ID_OPEN), geometry.openButton);
+    moveRect(Get(ID_CLOSE), geometry.closeButton);
+    moveRect(Get(ID_NEW), geometry.newButton);
+    moveRect(Get(ID_LOG), geometry.logButton);
+    moveRect(Get(ID_ABOUT), geometry.aboutButton);
     moveRect(Get(9001), settingsGeometry_.serialTitle);
     const std::array<int, 6> comboIds{ID_PORT, ID_BAUD, ID_DATA_BITS, ID_STOP_BITS, ID_PARITY, ID_FLOW};
     const std::array<const wchar_t*, 6> labels{L"串口号", L"波特率", L"数据位", L"停止位", L"校验位", L"流控制"};
@@ -487,33 +529,47 @@ void Application::Layout() {
     moveRect(Get(9011), settingsGeometry_.encodingLabel);
     moveRect(Get(ID_ENCODING), settingsGeometry_.encodingCombo);
 
-    const int rightPadding = 12;
+    const int rightPadding = geometry.cardPadding;
     const int titleTopPadding = settingsGeometry_.serialTitle.top -
                                 settingsGeometry_.serialCard.top;
     const int titleHeight = settingsGeometry_.serialTitle.bottom -
                             settingsGeometry_.serialTitle.top;
     const int titleGap = settingsGeometry_.serialFields[0].top -
                          settingsGeometry_.serialTitle.bottom;
-    const int headerBottom = logCard_.top + titleTopPadding + titleHeight + titleGap;
-    MoveWindow(Get(9004), rightX + rightPadding, logCard_.top + titleTopPadding, 150,
-               titleHeight, TRUE);
-    int toolX = rightX + rightW;
-    const std::array<std::pair<int, int>, 5> tools{{{ID_EXPORT, 90}, {ID_CLEAR_LOG, 76}, {ID_COPY_ALL, 100}, {ID_PAUSE, 100}, {ID_RX_FILE, 110}}};
-    const int toolbarTop = logCard_.top + std::max(4, titleTopPadding / 2);
-    toolX -= rightPadding;
-    for (const auto& [id, w] : tools) {
-        toolX -= w;
-        MoveWindow(Get(id), toolX, toolbarTop, w, std::max(32, titleHeight + 8), TRUE);
-        toolX -= gap;
+    const std::array<int, 5> tools{ID_RX_FILE, ID_PAUSE, ID_COPY_ALL, ID_CLEAR_LOG, ID_EXPORT};
+    std::array<int, 5> toolWidths{};
+    const int toolGap = scale(6);
+    int toolWidth = 4 * toolGap;
+    HDC dc = GetDC(window_);
+    const auto oldFont = SelectObject(dc, font_);
+    for (std::size_t i = 0; i < tools.size(); ++i) {
+        const auto text = WindowText(Get(tools[i]));
+        SIZE size{}; GetTextExtentPoint32W(dc, text.c_str(), static_cast<int>(text.size()), &size);
+        toolWidths[i] = size.cx + scale(16);
+        toolWidth += toolWidths[i];
     }
-    const int logTop = headerBottom;
+    SelectObject(dc, titleFont_);
+    SIZE titleSize{}; GetTextExtentPoint32W(dc, L"通信记录", 4, &titleSize);
+    SelectObject(dc, oldFont); ReleaseDC(window_, dc);
+    geometry.commRecordTitle.right = geometry.commRecordTitle.left + titleSize.cx;
+    moveRect(Get(9004), geometry.commRecordTitle);
+    int toolX = rightX + rightW - rightPadding - toolWidth;
+    int toolbarTop = logCard_.top + std::max(4, titleTopPadding / 2);
+    const int toolHeight = std::max(32, titleHeight + 8);
+    if (toolX < geometry.commRecordTitle.right + toolGap)
+        toolbarTop = geometry.commRecordTitle.bottom + toolGap;
+    for (std::size_t i = 0; i < tools.size(); ++i) {
+        MoveWindow(Get(tools[i]), toolX, toolbarTop, toolWidths[i], toolHeight, TRUE);
+        toolX += toolWidths[i] + toolGap;
+    }
+    const int logTop = std::max<int>(logCard_.top + titleTopPadding + titleHeight + titleGap,
+                                toolbarTop + toolHeight + toolGap);
     const int logLeft = rightX + rightPadding;
     const int logRight = rightX + rightW - rightPadding;
     MoveWindow(Get(ID_LOG_VIEW), logLeft, logTop, std::max(1, logRight - logLeft),
                std::max(120, static_cast<int>(logCard_.bottom) - rightPadding - logTop), TRUE);
 
-    MoveWindow(Get(9005), rightX + rightPadding, sendCard_.top + titleTopPadding, 150,
-               titleHeight, TRUE);
+    moveRect(Get(9005), geometry.dataSendTitle);
     const int actionW = 170;
     const int editTop = sendCard_.top + titleTopPadding + titleHeight + titleGap;
     const int editBottom = sendCard_.bottom - rightPadding;
@@ -530,6 +586,23 @@ void Application::Layout() {
     for (int id : actions) {
         MoveWindow(Get(id), actionX, actionY, actionW, actionHeight, TRUE);
         actionY += actionHeight + actionGap;
+    }
+    const auto placeExtension = [&](int id, const RECT& rect, bool visible) {
+        HWND control = Get(id);
+        if (!visible && GetFocus() == control) SetFocus(Get(ID_SEND_EDIT));
+        if (visible) moveRect(control, rect);
+        ShowWindow(control, visible ? SW_SHOWNA : SW_HIDE);
+    };
+    placeExtension(extension::CustomTitle, geometry.customDataTitle, !IsRectEmpty(&geometry.customDataTitle));
+    placeExtension(extension::ProtocolTitle, geometry.protocolTitle, !IsRectEmpty(&geometry.protocolTitle));
+    for (int i = 0; i < kMaximumStoredCustomSlots; ++i) {
+        const auto& slot = geometry.customSlots[static_cast<std::size_t>(i)];
+        // Rows are laid out at fixed full-column width. The host window clips
+        // the portion outside the progressively revealed extension viewport.
+        const bool visible = geometry.extensionVisible && i < geometry.visibleCustomRows;
+        placeExtension(extension::IndexFirst + i, slot.index, visible);
+        placeExtension(extension::EditFirst + i, slot.edit, visible);
+        placeExtension(extension::SendFirst + i, slot.send, visible);
     }
 
     MoveWindow(Get(ID_STATUS_LEFT), pad, height - statusH, width / 2, statusH, TRUE);
@@ -917,6 +990,15 @@ bool Application::LoadFilePath(const std::wstring& path) {
 
 void Application::Command(int id, int notification, HWND) {
     if (id == ID_SEND_EDIT && notification == EN_CHANGE) { NormalizeHexEditor(); return; }
+    if (id >= extension::SendFirst && id < extension::SendFirst + kMaximumStoredCustomSlots &&
+        notification == BN_CLICKED) {
+        const int slot = id - extension::SendFirst;
+        const std::wstring old = WindowText(Get(ID_SEND_EDIT));
+        SetWindowTextW(Get(ID_SEND_EDIT), WindowText(Get(extension::EditFirst + slot)).c_str());
+        SendData();
+        SetWindowTextW(Get(ID_SEND_EDIT), old.c_str());
+        return;
+    }
     switch (id) {
     case ID_OPEN: OpenPort(); break;
     case ID_CLOSE: ClosePort(); break;
@@ -1076,14 +1158,14 @@ HBRUSH Application::ControlColor(HDC dc, HWND control, UINT message) {
 }
 
 void Application::Paint() {
+    const auto& settingsGeometry_ = layout_.settings;
+    const auto& logCard_ = layout_.commRecordCard;
+    const auto& sendCard_ = layout_.dataSendCard;
     PAINTSTRUCT paint{};
     HDC dc = BeginPaint(window_, &paint);
     RECT client{};
     GetClientRect(window_, &client);
     FillRect(dc, &client, backgroundBrush_);
-    const int width = client.right;
-    const int height = client.bottom;
-    const int pad = 20;
     HPEN border = CreatePen(PS_SOLID, 1, RGB(213, 224, 237));
     auto oldPen = SelectObject(dc, border);
     auto oldBrush = SelectObject(dc, whiteBrush_);
@@ -1100,15 +1182,15 @@ void Application::Paint() {
     }
     if (logCard_.right > logCard_.left) card(logCard_.left, logCard_.top, logCard_.right, logCard_.bottom);
     if (sendCard_.right > sendCard_.left) card(sendCard_.left, sendCard_.top, sendCard_.right, sendCard_.bottom);
+    if (layout_.extensionVisible) {
+        const auto& custom = layout_.customDataCard;
+        const auto& protocol = layout_.protocolCard;
+        card(custom.left, custom.top, custom.right, custom.bottom);
+        card(protocol.left, protocol.top, protocol.right, protocol.bottom);
+    }
     SelectObject(dc, oldBrush);
     SelectObject(dc, oldPen);
     DeleteObject(border);
-    HPEN separator = CreatePen(PS_SOLID, 1, RGB(216, 226, 238));
-    oldPen = SelectObject(dc, separator);
-    MoveToEx(dc, pad, height - 42, nullptr);
-    LineTo(dc, width - pad, height - 42);
-    SelectObject(dc, oldPen);
-    DeleteObject(separator);
     EndPaint(window_, &paint);
 }
 
@@ -1143,6 +1225,9 @@ void Application::Shutdown() {
 }
 
 LRESULT Application::QueryState(WPARAM query) const {
+    const auto& settingsGeometry_ = layout_.settings;
+    const auto& logCard_ = layout_.commRecordCard;
+    const auto& sendCard_ = layout_.dataSendCard;
     switch (query) {
     case 0: return serial_.IsOpen() ? 1 : 0;
     case 1: return static_cast<LRESULT>(std::min<std::uint64_t>(rxBytes_, LONG_MAX));
@@ -1168,6 +1253,32 @@ LRESULT Application::QueryState(WPARAM query) const {
     case 29: return sendCard_.bottom;
     case 30: return settingsGeometry_.cardGap;
     case 31: return reinterpret_cast<HFONT>(SendMessageW(Get(ID_SEND_EDIT), WM_GETFONT, 0, 0)) == recordView_.Font() ? 1 : 0;
+    case 40: return layout_.extensionVisible ? 1 : 0;
+    case 41: return layout_.extensionStartWidth;
+    case 42: return layout_.extensionFullVisibleWidth;
+    case 43: return layout_.extensionColumnWidth;
+    case 44: return layout_.visibleCustomRows;
+    case 45: return layout_.customDataCard.top;
+    case 46: return layout_.customDataCard.bottom;
+    case 47: return layout_.protocolCard.top;
+    case 48: return layout_.protocolCard.bottom;
+    case 49: return static_cast<LRESULT>(layout_.phase);
+    case 50: return layout_.defaultClientWidth;
+    case 51: return recordView_.MinimumContentWidth8();
+    case 52: return layout_.leftColumnWidth;
+    case 53: return layout_.mainColumnMinWidth8;
+    case 54: return layout_.extensionFullWidth;
+    case 55: return layout_.extensionGap;
+    case 56: return layout_.extensionContentMinWidth;
+    case 57: return GetDpiForWindow(window_);
+    case 58: return layout_.settings.serialCard.right - layout_.settings.serialCard.left;
+    case 59: return layout_.settings.receiveCard.right - layout_.settings.receiveCard.left;
+    case 60: return layout_.settings.sendCard.right - layout_.settings.sendCard.left;
+    case 61: return layout_.openButton.left;
+    case 62: return layout_.closeButton.right;
+    case 63: return layout_.commRecordCard.left;
+    case 64: return layout_.commRecordCard.right - layout_.commRecordCard.left;
+    case 65: return layout_.currentVisibleContentRight;
     default: return -1;
     }
 }
@@ -1193,6 +1304,15 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
     case WM_CREATE:
         app = new Application(window); SetWindowLongPtrW(window, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(app)); app->Create(); return 0;
     case WM_SIZE: if (app) app->Layout(); return 0;
+    case WM_DPICHANGED: {
+        if (app) app->Layout();
+        const auto* suggested = reinterpret_cast<const RECT*>(lParam);
+        SetWindowPos(window, nullptr, suggested->left, suggested->top,
+                     suggested->right - suggested->left, suggested->bottom - suggested->top,
+                     SWP_NOZORDER | SWP_NOACTIVATE);
+        if (app) app->Layout();
+        return 0;
+    }
     case WM_PAINT: if (app) { app->Paint(); return 0; } break;
     case WM_GETMINMAXINFO: {
         auto* info = reinterpret_cast<MINMAXINFO*>(lParam);
@@ -1200,7 +1320,10 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
         // Keep enough room for the left settings panel and an 8-byte
         // HEX/TEXT row, while never making the window larger than the
         // current monitor work area on high-DPI laptop screens.
-        int minimumWidth = MulDiv(1080, static_cast<int>(dpi), 96);
+        RECT minimumRect{0, 0, app ? app->DefaultClientWidth() : 0, 0};
+        AdjustWindowRectExForDpi(&minimumRect, static_cast<DWORD>(GetWindowLongPtrW(window, GWL_STYLE)),
+                                 FALSE, static_cast<DWORD>(GetWindowLongPtrW(window, GWL_EXSTYLE)), dpi);
+        int minimumWidth = minimumRect.right - minimumRect.left;
         int minimumHeight = MulDiv(680, static_cast<int>(dpi), 96);
         HMONITOR monitor = MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST);
         MONITORINFO monitorInfo{sizeof(monitorInfo)};
@@ -1288,7 +1411,8 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int showCommand) {
         return 1;
     }
     HWND window = CreateWindowExW(0, kWindowClass, product::kDisplayName, WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
-                                  CW_USEDEFAULT, CW_USEDEFAULT, 1536, 1024, nullptr, nullptr, instance, nullptr);
+                                  CW_USEDEFAULT, CW_USEDEFAULT, 1536,
+                                  1024, nullptr, nullptr, instance, nullptr);
     if (!window) {
         UnregisterClassW(kWindowClass, instance);
         if (classBrush) DeleteObject(classBrush);
@@ -1296,6 +1420,15 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int showCommand) {
         CoUninitialize();
         return 1;
     }
+    // Controls now have real font/DPI metrics. Size the hidden initial window
+    // to Phase A before showing it, including the native non-client frame.
+    const auto* app = reinterpret_cast<Application*>(GetWindowLongPtrW(window, GWLP_USERDATA));
+    RECT initialClient{0, 0, app->DefaultClientWidth(), 0};
+    AdjustWindowRectExForDpi(&initialClient, static_cast<DWORD>(GetWindowLongPtrW(window, GWL_STYLE)),
+                             FALSE, static_cast<DWORD>(GetWindowLongPtrW(window, GWL_EXSTYLE)), GetDpiForWindow(window));
+    RECT initialWindow{}; GetWindowRect(window, &initialWindow);
+    SetWindowPos(window, nullptr, 0, 0, initialClient.right - initialClient.left,
+                 initialWindow.bottom - initialWindow.top, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
     CenterWindowOnMonitor(window);
     ShowWindow(window, showCommand); UpdateWindow(window);
     MSG message{};

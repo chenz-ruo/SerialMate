@@ -87,11 +87,12 @@ std::size_t RowBucket(std::size_t bytesPerRow) {
     case 4: return 0;
     case 8: return 1;
     case 12: return 2;
-    default: return 3;
+    case 16: return 3;
+    default: return 4;
     }
 }
 
-constexpr std::array<std::size_t, 4> kRowWidths{4, 8, 12, 16};
+constexpr std::array<std::size_t, 5> kRowWidths{4, 8, 12, 16, 32};
 
 } // namespace
 

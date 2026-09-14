@@ -7,6 +7,13 @@
 namespace comm {
 namespace {
 constexpr wchar_t kClass[] = L"SerialMateCommView";
+std::wstring DisplayTimestamp(const std::wstring& timestamp) {
+    const auto separator = timestamp.find(L' ');
+    auto value = separator == std::wstring::npos ? timestamp : timestamp.substr(separator + 1);
+    const auto dot = value.find(L'.');
+    if (dot != std::wstring::npos && dot + 2 < value.size()) value.resize(dot + 2);
+    return value;
+}
 bool Clipboard(HWND owner, const std::wstring& text) {
     if (text.empty()) return false;
     const SIZE_T size = (text.size() + 1) * sizeof(wchar_t);
@@ -42,7 +49,10 @@ HWND RecordView::Create(HWND parent, int id) {
 }
 
 void RecordView::SetDpi(UINT dpi) {
-    dpi_ = dpi ? dpi : 96;
+    dpi = dpi ? dpi : 96;
+    if (font_ && dpi_ == dpi) return;
+    dpi_ = dpi;
+    measuredDpi_ = 0;
     if (font_) DeleteObject(font_);
     font_ = CreateFontW(-MulDiv(16, static_cast<int>(dpi_), 96), 0, 0, 0, FW_NORMAL,
         FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
@@ -65,15 +75,25 @@ void RecordView::Measure() {
     simpleLines_.clear(); simpleLastId_ = 0;
     partialSelecting_ = false;
     SIZE timestamp{};
-    constexpr wchar_t sample[] = L"[2000-00-00 00:00:00.000]";
-    GetTextExtentPoint32W(dc, sample, static_cast<int>(std::size(sample) - 1), &timestamp);
     SIZE direction{};
-    GetTextExtentPoint32W(dc, L"→ TX", 4, &direction);
-    directionX_ = pad_ + (timestamps_ ? timestamp.cx + 2 * cell_ : 0);
-    hexX_ = directionX_ + direction.cx + 2 * cell_;
+    if (minimumContentWidth8_ == 0 || measuredDpi_ != dpi_) {
+        constexpr wchar_t sample[] = L"[00:00:00.0]";
+        GetTextExtentPoint32W(dc, sample, static_cast<int>(std::size(sample) - 1), &timestamp);
+        GetTextExtentPoint32W(dc, L"→TX", 3, &direction);
+        // Reserve the normal timestamp even when its display is toggled off, so
+        // changing display options cannot redistribute the application's columns.
+        const int normalHexX = pad_ + timestamp.cx + direction.cx + cell_;
+        minimumContentWidth8_ = normalHexX + (8 * 4 + 1) * cell_ + pad_;
+        measuredDpi_ = dpi_;
+    } else {
+        GetTextExtentPoint32W(dc, L"[00:00:00.0]", 12, &timestamp);
+        GetTextExtentPoint32W(dc, L"→TX", 3, &direction);
+    }
+    directionX_ = pad_ + (timestamps_ ? timestamp.cx : 0);
+    hexX_ = directionX_ + direction.cx + cell_;
     RECT client{}; GetClientRect(window_, &client);
-    bytesPerRow_ = kBytesPerRow;
-    for (const std::size_t candidate : {std::size_t(16), std::size_t(12), std::size_t(8), std::size_t(4)}) {
+    bytesPerRow_ = 8;
+    for (const std::size_t candidate : {std::size_t(32), std::size_t(16), std::size_t(8)}) {
         const int candidateDivider = hexX_ + static_cast<int>(candidate * 3 - 1) * cell_ + cell_;
         const int candidateAscii = candidateDivider + cell_;
         const int candidateWidth = candidateAscii + static_cast<int>(candidate) * cell_ + pad_;
@@ -243,7 +263,31 @@ std::wstring RecordView::Copy(CopyFormat format, bool selected) const {
     }
     // While paused, unselected copy must use the frozen snapshot as well;
     // otherwise the clipboard would expose records that are not visible.
-    return Active().Copy(format, selected ? Selection() : std::nullopt, timestamps_, encoding_, bytesPerRow_);
+    if (format != CopyFormat::Full)
+        return Active().Copy(format, selected ? Selection() : std::nullopt, timestamps_, encoding_, bytesPerRow_);
+    std::wstring result;
+    const auto range = selected ? Selection() : std::nullopt;
+    for (const auto& record : Active().Records()) {
+        if (range && (record.id < std::min(range->first, range->second) ||
+                      record.id > std::max(range->first, range->second))) continue;
+        Record displayed = record;
+        displayed.timestamp = DisplayTimestamp(record.timestamp);
+        auto text = FormatRecord(displayed, format, timestamps_, encoding_, bytesPerRow_);
+        if (record.kind == RecordKind::Data) {
+            const std::wstring oldPrefix = (timestamps_ ? L"[" + displayed.timestamp + L"]  " : L"") +
+                (record.direction == Direction::Rx ? L"← RX  " : L"→ TX  ");
+            const std::wstring newPrefix = (timestamps_ ? L"[" + displayed.timestamp + L"]" : L"") +
+                (record.direction == Direction::Rx ? L"←RX " : L"→TX ");
+            text.replace(0, oldPrefix.size(), newPrefix);
+            std::size_t line = text.find(L"\r\n");
+            while (line != std::wstring::npos && line + 2 < text.size()) {
+                text.replace(line + 2, oldPrefix.size(), newPrefix.size(), L' ');
+                line = text.find(L"\r\n", line + 2);
+            }
+        }
+        result += text;
+    }
+    return result;
 }
 
 void RecordView::CopySelection() {
@@ -284,13 +328,12 @@ void RecordView::BuildSimpleLines() {
         const bool system = record.kind == RecordKind::System;
         if (system || timestamps_) {
             std::wstring header;
-            if (timestamps_) header = L"[" + record.timestamp + L"]";
+            if (timestamps_) header = L"[" + DisplayTimestamp(record.timestamp) + L"]";
             if (system) {
                 if (!header.empty()) header += L"  ";
                 header += record.message;
             } else if (timestamps_) {
-                header += L"  ";
-                header += record.direction == Direction::Rx ? L"← RX" : L"→ TX";
+                header += record.direction == Direction::Rx ? L"←RX" : L"→TX";
             }
             simpleLines_.push_back({std::move(header), record.id, record.id, true,
                                     !system && timestamps_, record.direction});
@@ -544,7 +587,7 @@ void RecordView::Paint(HDC target) {
             }
             const int lineY = ContentTop() + static_cast<int>(i) * rowHeight_;
             if (line.header && line.hasDirection) {
-                const auto marker = line.text.find(line.direction == Direction::Rx ? L"← RX" : L"→ TX");
+                const auto marker = line.text.find(line.direction == Direction::Rx ? L"←RX" : L"→TX");
                 if (marker != std::wstring::npos) {
                     SetTextColor(dc, RGB(80, 105, 135));
                     TextOutW(dc, pad_, lineY, line.text.data(), static_cast<int>(marker));
@@ -619,7 +662,7 @@ void RecordView::Paint(HDC target) {
             // content area's left padding, applying horizontal scroll once.
             std::wstring message;
             if (row->first && timestamps_ && !record.timestamp.empty()) {
-                message = L"[" + record.timestamp + L"]  ";
+                message = L"[" + DisplayTimestamp(record.timestamp) + L"]  ";
             }
             message += record.message.substr(0, 256);
             std::replace(message.begin(), message.end(), L'\r', L' ');
@@ -629,10 +672,10 @@ void RecordView::Paint(HDC target) {
             MoveToEx(dc, dividerX_ - horizontal_, y, nullptr);
             LineTo(dc, dividerX_ - horizontal_, y + rowHeight_);
             if (row->first && timestamps_ && !record.timestamp.empty()) {
-                const auto stamp = L"[" + record.timestamp + L"]";
+                const auto stamp = L"[" + DisplayTimestamp(record.timestamp) + L"]";
                 draw(pad_, stamp.c_str(), static_cast<int>(stamp.size()), RGB(95, 114, 142));
             }
-            if (row->first) draw(directionX_, record.direction == Direction::Rx ? L"← RX" : L"→ TX", 4,
+            if (row->first) draw(directionX_, record.direction == Direction::Rx ? L"←RX" : L"→TX", 3,
                                 record.direction == Direction::Rx ? RGB(0, 140, 55) : RGB(0, 100, 215));
             constexpr wchar_t digits[] = L"0123456789ABCDEF";
             for (std::size_t j = 0; j < row->count; ++j) {

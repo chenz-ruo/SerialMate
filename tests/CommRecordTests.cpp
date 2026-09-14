@@ -33,7 +33,7 @@ int wmain() {
         const auto direction = (index % 2 == 0) ? Direction::Rx : Direction::Tx;
         const auto& record = buffer.Add(direction, L"2026-09-12 08:25:15.139", Bytes(length));
         Check(record.rawBytes.size() == length, L"原始字节保留");
-        Check(record.RowCount() == (length + 15) / 16, L"16字节行数");
+        Check(record.RowCount() == (length + kBytesPerRow - 1) / kBytesPerRow, L"自适应行数");
         Check(record.firstRow + record.RowCount() <= buffer.BaseRow() + buffer.RowCount(), L"前缀行索引");
     }
     Check(buffer.ByteCount() == 1 + 2 + 15 + 16 + 17 + 31 + 32 + 33 + 64 + 128 + 512 + 1024,
@@ -120,11 +120,13 @@ int wmain() {
     trimBytes.Add(Direction::Tx, L"1", Bytes(16));
     const auto& retained = trimBytes.Add(Direction::Tx, L"2", Bytes(17));
     Check(trimBytes.Records().size() == 1 && trimBytes.Records().front().id == retained.id, L"按字节淘汰整条记录");
-    Check(trimBytes.BaseRow() == 1 && trimBytes.RowCount() == 2, L"淘汰后绝对行前缀");
+    Check(trimBytes.BaseRow() == 2 && trimBytes.RowCount() == 3, L"淘汰后绝对行前缀");
     Check(trimBytes.BaseRow(8) == 2 && trimBytes.BaseRow(12) == 2 && trimBytes.BaseRow(16) == 1,
           L"淘汰后自适应行前缀");
-    Check(trimBytes.RowAt(0).has_value() && trimBytes.RowAt(1).has_value() && !trimBytes.RowAt(2).has_value(), L"局部行索引");
-    Check(trimBytes.RowAt(0)->offset == 0 && trimBytes.RowAt(1)->offset == 16, L"VisualRow偏移");
+    Check(trimBytes.RowAt(0).has_value() && trimBytes.RowAt(1).has_value() &&
+              trimBytes.RowAt(2).has_value() && !trimBytes.RowAt(3).has_value(), L"局部行索引");
+    Check(trimBytes.RowAt(0)->offset == 0 && trimBytes.RowAt(1)->offset == 8 &&
+              trimBytes.RowAt(2)->offset == 16, L"VisualRow偏移");
     Check(trimBytes.RowOf(retained.id).value_or(99) == 0, L"记录局部首行索引");
 
     RecordBuffer trimRecords(1024, 2);

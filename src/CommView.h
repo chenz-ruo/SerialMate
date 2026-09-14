@@ -33,6 +33,7 @@ public:
     HFONT Font() const { return font_; }
     int RowHeight() const { return rowHeight_; }
     int ContentWidth() const { return contentWidth_; }
+    int MinimumContentWidth8() const { return minimumContentWidth8_; }
     int HexLeft() const { return hexX_; }
     int AsciiLeft() const { return asciiX_; }
     int CharacterWidth() const { return cell_; }
@@ -75,6 +76,8 @@ private:
     int cell_ = 8, rowHeight_ = 20, pad_ = 8;
     int normalRowHeight_ = 20;
     int directionX_ = 0, hexX_ = 0, dividerX_ = 0, asciiX_ = 0, contentWidth_ = 0;
+    int minimumContentWidth8_ = 0;
+    unsigned measuredDpi_ = 0;
     int horizontal_ = 0, wheelRemainder_ = 0;
     std::size_t top_ = 0, base_ = 0, paintedRows_ = 0;
     std::size_t baseBytesPerRow_ = kBytesPerRow;

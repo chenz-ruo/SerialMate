@@ -13,7 +13,7 @@
 
 namespace comm {
 
-constexpr std::size_t kBytesPerRow = 16;
+constexpr std::size_t kBytesPerRow = 8;
 
 enum class Direction {
     Rx,
@@ -41,7 +41,7 @@ struct Record {
     std::vector<std::uint8_t> rawBytes;
     std::wstring message;
     std::size_t firstRow = 0;
-    std::array<std::size_t, 4> firstRows{};
+    std::array<std::size_t, 5> firstRows{};
 
     std::size_t RowCount(std::size_t bytesPerRow = kBytesPerRow) const;
 };
@@ -110,8 +110,8 @@ private:
     std::size_t maxBytes_;
     std::size_t maxRecords_;
     std::size_t byteCount_ = 0;
-    std::array<std::size_t, 4> rowCounts_{};
-    std::array<std::size_t, 4> baseRows_{};
+    std::array<std::size_t, 5> rowCounts_{};
+    std::array<std::size_t, 5> baseRows_{};
     std::uint64_t nextId_ = 1;
 };
 
