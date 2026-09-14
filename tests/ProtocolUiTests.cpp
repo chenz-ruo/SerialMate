@@ -176,7 +176,9 @@ void CheckForm(HWND window) {
         protocolui::AddressLabel, protocolui::AddressEdit, protocolui::QuantityLabel,
         protocolui::QuantityEdit, protocolui::DataLabel, protocolui::DataEdit,
         protocolui::Generate, protocolui::FillCustom, protocolui::ResultLabel,
-        protocolui::ResultEdit, protocolui::Copy, protocolui::Status};
+        protocolui::ResultEdit, protocolui::Copy};
+    Check(GetDlgItem(window, protocolui::Status) == nullptr,
+          "obsolete protocol status control still exists");
     for (int id : ids) CheckVisible(window, id, false, "protocol control visible in Standard Mode");
 
     RECT client{};
@@ -206,6 +208,19 @@ void CheckForm(HWND window) {
           "default slave address is not 01");
     Check((GetWindowLongPtrW(GetDlgItem(window, protocolui::ResultEdit), GWL_STYLE) & ES_READONLY) != 0,
           "protocol result edit is not read-only");
+    const auto CheckRowAligned = [&](int first, int second, const char* message) {
+        const RECT firstRect = ChildRect(window, GetDlgItem(window, first));
+        const RECT secondRect = ChildRect(window, GetDlgItem(window, second));
+        Check(firstRect.top == secondRect.top && firstRect.bottom == secondRect.bottom, message);
+    };
+    CheckRowAligned(protocolui::TypeLabel, protocolui::TypeCombo,
+                    "protocol type label and combo are not vertically aligned");
+    CheckRowAligned(protocolui::SlaveEdit, protocolui::FunctionCombo,
+                    "slave edit and function combo are not vertically aligned");
+    CheckRowAligned(protocolui::Generate, protocolui::FillCustom,
+                    "protocol action buttons are not vertically aligned");
+    CheckRowAligned(protocolui::ResultEdit, protocolui::Copy,
+                    "protocol result edit and copy button are not vertically aligned");
 
     for (int index : {0, 1}) {
         SelectFunction(window, index);
@@ -254,8 +269,8 @@ void CheckInteractions(HWND window) {
     const std::wstring expected = L"01 03 00 00 00 02 C4 0B";
     Check(Text(GetDlgItem(window, protocolui::ResultEdit)) == expected,
           "03 generate button did not display the standard frame");
-    Check(Text(GetDlgItem(window, protocolui::Status)).find(L"8 bytes / CRC C4 0B") !=
-              std::wstring::npos,
+    Check(Text(GetDlgItem(window, protocolui::ResultLabel)) ==
+              L"生成结果 · 8 bytes · CRC C4 0B",
           "generated frame status is incorrect");
 
     PutClipboard(L"OLD");
@@ -283,8 +298,8 @@ void CheckInteractions(HWND window) {
           "fill transmitted serial data");
     Check(Message(GetDlgItem(window, kTxHexId), BM_GETCHECK) == hexBefore,
           "fill changed the HEX send checkbox");
-    Check(Text(GetDlgItem(window, protocolui::Status)) ==
-              L"已填入自定义5；发送时请启用“十六进制发送”",
+    Check(Text(GetDlgItem(window, protocolui::ResultLabel)) ==
+              L"已填入自定义5 · 请启用HEX发送",
           "fill guidance is missing when HEX send is disabled");
     Message(GetDlgItem(window, kTxHexId), BM_SETCHECK, BST_CHECKED, 0);
     Click(window, kTxHexId);
@@ -301,7 +316,7 @@ void CheckInteractions(HWND window) {
     Click(window, protocolui::Generate);
     Check(Text(GetDlgItem(window, protocolui::ResultEdit)) == expected,
           "invalid generation cleared the previous valid result");
-    Check(Text(GetDlgItem(window, protocolui::Status)).find(L"错误：") == 0,
+    Check(Text(GetDlgItem(window, protocolui::ResultLabel)).find(L"生成失败 · ") == 0,
           "invalid generation did not show an error status");
 }
 }  // namespace

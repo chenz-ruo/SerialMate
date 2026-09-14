@@ -197,7 +197,7 @@ inline constexpr int FillCustom = 713;
 inline constexpr int ResultLabel = 714;
 inline constexpr int ResultEdit = 715;
 inline constexpr int Copy = 716;
-inline constexpr int Status = 717;
+inline constexpr int Status = 717;  // 保留的废弃 ID，用于验证旧状态 HWND 不再创建
 inline constexpr int FillSlotFirst = 720;
 }
 ```
@@ -236,7 +236,7 @@ void SetProtocolControlsVisible(bool visible);
 
 - [ ] **Step 4: Implement compact dynamic rows**
 
-Lay out rows beneath the existing title in this order: protocol type; slave/function; address/quantity-or-value; optional write data; buttons; result label; result/copy; status. For `03/04/06`, move later rows upward when the data row is hidden. `UpdateProtocolForm()` changes labels and Show/Hide only, then calls `LayoutProtocolControls()`.
+Lay out rows beneath the existing title in this order: protocol type; slave/function; address/quantity-or-value; optional write data; buttons; result label; result/copy. Do not create a separate status row. Use the actual Win32 Combo height for the first two rows and keep every control in one row vertically aligned. For `03/04/06`, use the resulting 6-row compact layout; for `10`, use the 7-row layout with write data. `UpdateProtocolForm()` changes labels and Show/Hide only, then calls `LayoutProtocolControls()`.
 
 In `Application::Layout`, call `SetProtocolControlsVisible(layout_.extensionVisible)` and `LayoutProtocolControls()` after the existing custom-slot placement. Standard Mode hides all protocol controls; partial/full extension modes keep them shown and let the existing client viewport clip them.
 
@@ -268,19 +268,19 @@ git commit -m "feat: add dynamic Modbus protocol form"
 
 **Interfaces:**
 - Consumes: protocol Card edit values and `protocol::Generate`
-- Produces: result/status UI, real clipboard content, and one targeted custom slot update
+- Produces: result/feedback UI, real clipboard content, and one targeted custom slot update
 
 - [ ] **Step 1: Add failing end-to-end UI interaction tests**
 
 In `ProtocolUiTests.cpp`, use real HWND messages and literal expectations:
 
-1. Set `SlaveEdit=01`, select `03`, set address `0000`, quantity `0002`, click Generate, and assert `ResultEdit == L"01 03 00 00 00 02 C4 0B"` and status contains `8 bytes / CRC C4 0B`.
+1. Set `SlaveEdit=01`, select `03`, set address `0000`, quantity `0002`, click Generate, and assert `ResultEdit == L"01 03 00 00 00 02 C4 0B"` and `ResultLabel == L"生成结果 · 8 bytes · CRC C4 0B"`.
 2. Seed the clipboard with `unchanged`, click Copy, and assert clipboard Unicode text equals the exact result.
 3. Seed all 16 custom edits with distinct sentinel text and the main send edit with `MAIN-UNCHANGED`; record `WM_APP + 100` query keys `1` and `2`; record the `ID_TX_HEX` check state.
 4. Send `WM_COMMAND` with `protocolui::FillSlotFirst + 4`; assert only custom slot 5 becomes the generated HEX, all other slots remain unchanged, the main send edit remains `MAIN-UNCHANGED`, RX/TX counters do not change, and the HEX check state is unchanged.
-5. With HEX unchecked, assert protocol status is `已填入自定义5；发送时请启用“十六进制发送”`.
+5. With HEX unchecked, assert `ResultLabel` is `已填入自定义5 · 请启用HEX发送`.
 6. Clear the generated result in a fresh process, seed clipboard, invoke Copy and FillSlot command, and assert clipboard and all custom slots stay unchanged.
-7. Set slave to `00`, click Generate, and assert the previous valid result remains while status reports a non-empty error.
+7. Set slave to `00`, click Generate, and assert the previous valid result remains while `ResultLabel` reports a non-empty error.
 
 - [ ] **Step 2: Run interaction tests RED**
 
@@ -293,20 +293,20 @@ ctest --test-dir build -C Release -R "^ProtocolUi$" --output-on-failure
 
 Expected: FAIL because Generate/Copy/Fill commands have no implementation.
 
-- [ ] **Step 3: Implement Generate and status rendering**
+- [ ] **Step 3: Implement Generate and feedback rendering**
 
 Add `protocol::Result protocolResult_` to `Application` and implement:
 
 ```cpp
 void GenerateProtocolFrame();
-void UpdateProtocolStatus(const std::wstring& text);
+void UpdateProtocolFeedback(const std::wstring& text);
 ```
 
-Build `protocol::Request` from the current form and call `protocol::Generate`. On success, replace `protocolResult_`, update the read-only result, and set `状态：N bytes / CRC LL HH`. On failure, keep the prior valid result/result text unchanged and set `错误：<generator error>`.
+Build `protocol::Request` from the current form and call `protocol::Generate`. On success, replace `protocolResult_`, update the read-only result, and set the result title to `生成结果 · N bytes · CRC LL HH`. On failure, keep the prior valid result/result text unchanged and set the title to `生成失败 · <generator error>`.
 
 - [ ] **Step 4: Implement real clipboard copy**
 
-Implement `CopyProtocolResult()` using the existing `PutClipboardText`. Empty result only updates protocol status and must not call `EmptyClipboard`. Successful copy writes only normalized HEX and updates the protocol status.
+Implement `CopyProtocolResult()` using the existing `PutClipboardText`. Empty result only updates the result-title feedback and must not call `EmptyClipboard`. Successful copy writes only normalized HEX and updates the same title.
 
 - [ ] **Step 5: Implement the 1–16 popup and targeted fill**
 
