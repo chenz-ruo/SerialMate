@@ -14,6 +14,8 @@
 
 namespace {
 constexpr UINT kQuery = WM_APP + 100;
+constexpr int kTxHexId = 117;
+constexpr int kSendEditId = 128;
 int checks = 0;
 
 void Check(bool condition, const char* message) {
@@ -127,6 +129,46 @@ void CheckVisible(HWND window, int id, bool expected, const char* message) {
     Check((IsWindowVisible(control) != FALSE) == expected, message);
 }
 
+void SetText(HWND window, int id, const wchar_t* text) {
+    Check(Message(GetDlgItem(window, id), WM_SETTEXT, 0, reinterpret_cast<LPARAM>(text)) != FALSE,
+          "cannot set protocol test text");
+}
+
+void Click(HWND window, int id) {
+    Message(window, WM_COMMAND, MAKEWPARAM(id, BN_CLICKED),
+            reinterpret_cast<LPARAM>(GetDlgItem(window, id)));
+}
+
+void PutClipboard(const wchar_t* text) {
+    const std::size_t bytes = (wcslen(text) + 1) * sizeof(wchar_t);
+    HGLOBAL memory = GlobalAlloc(GMEM_MOVEABLE, bytes);
+    Check(memory != nullptr, "cannot allocate clipboard seed");
+    void* target = GlobalLock(memory);
+    Check(target != nullptr, "cannot lock clipboard seed");
+    memcpy(target, text, bytes);
+    GlobalUnlock(memory);
+    HWND owner = CreateWindowExW(0, L"STATIC", L"", 0, 0, 0, 0, 0, HWND_MESSAGE,
+                                 nullptr, GetModuleHandleW(nullptr), nullptr);
+    Check(owner != nullptr, "cannot create clipboard owner window");
+    Check(OpenClipboard(owner) != FALSE, "cannot open clipboard for seed");
+    EmptyClipboard();
+    Check(SetClipboardData(CF_UNICODETEXT, memory) != nullptr, "cannot seed clipboard");
+    CloseClipboard();
+    DestroyWindow(owner);
+}
+
+std::wstring ClipboardText() {
+    Check(OpenClipboard(nullptr) != FALSE, "cannot open clipboard for verification");
+    const HANDLE data = GetClipboardData(CF_UNICODETEXT);
+    Check(data != nullptr, "Unicode clipboard data is missing");
+    const auto* text = static_cast<const wchar_t*>(GlobalLock(data));
+    Check(text != nullptr, "cannot lock clipboard data");
+    const std::wstring result(text);
+    GlobalUnlock(data);
+    CloseClipboard();
+    return result;
+}
+
 void CheckForm(HWND window) {
     const std::vector<int> ids{
         protocolui::TypeLabel, protocolui::TypeCombo, protocolui::SlaveLabel,
@@ -162,6 +204,8 @@ void CheckForm(HWND window) {
           "protocol combo is not fixed to Modbus RTU");
     Check(Text(GetDlgItem(window, protocolui::SlaveEdit)) == L"01",
           "default slave address is not 01");
+    Check((GetWindowLongPtrW(GetDlgItem(window, protocolui::ResultEdit), GWL_STYLE) & ES_READONLY) != 0,
+          "protocol result edit is not read-only");
 
     for (int index : {0, 1}) {
         SelectFunction(window, index);
@@ -192,6 +236,70 @@ void CheckForm(HWND window) {
               "10 form control lies outside protocol Card");
     }
 }
+
+void CheckInteractions(HWND window) {
+    PutClipboard(L"UNCHANGED");
+    SetText(window, extension::EditFirst, L"SLOT-1");
+    Click(window, protocolui::Copy);
+    Message(window, WM_COMMAND, MAKEWPARAM(protocolui::FillSlotFirst, 0), 0);
+    Check(ClipboardText() == L"UNCHANGED", "copy without a result changed clipboard");
+    Check(Text(GetDlgItem(window, extension::EditFirst)) == L"SLOT-1",
+          "fill without a result changed custom data");
+
+    SelectFunction(window, 0);
+    SetText(window, protocolui::SlaveEdit, L"01");
+    SetText(window, protocolui::AddressEdit, L"0000");
+    SetText(window, protocolui::QuantityEdit, L"0002");
+    Click(window, protocolui::Generate);
+    const std::wstring expected = L"01 03 00 00 00 02 C4 0B";
+    Check(Text(GetDlgItem(window, protocolui::ResultEdit)) == expected,
+          "03 generate button did not display the standard frame");
+    Check(Text(GetDlgItem(window, protocolui::Status)).find(L"8 bytes / CRC C4 0B") !=
+              std::wstring::npos,
+          "generated frame status is incorrect");
+
+    PutClipboard(L"OLD");
+    Click(window, protocolui::Copy);
+    const std::wstring copied = ClipboardText();
+    Check(copied == expected, "copy did not place normalized frame on clipboard");
+
+    for (int slot = 0; slot < kMaximumStoredCustomSlots; ++slot) {
+        const auto sentinel = L"SLOT-" + std::to_wstring(slot + 1);
+        SetText(window, extension::EditFirst + slot, sentinel.c_str());
+    }
+    SetText(window, kSendEditId, L"MAIN-UNCHANGED");
+    const LRESULT rxBefore = Message(window, kQuery, 1);
+    const LRESULT txBefore = Message(window, kQuery, 2);
+    const LRESULT hexBefore = Message(GetDlgItem(window, kTxHexId), BM_GETCHECK);
+    Message(window, WM_COMMAND, MAKEWPARAM(protocolui::FillSlotFirst + 4, 0), 0);
+    for (int slot = 0; slot < kMaximumStoredCustomSlots; ++slot) {
+        const auto expectedSlot = slot == 4 ? expected : L"SLOT-" + std::to_wstring(slot + 1);
+        Check(Text(GetDlgItem(window, extension::EditFirst + slot)) == expectedSlot,
+              "fill changed the wrong custom slot");
+    }
+    Check(Text(GetDlgItem(window, kSendEditId)) == L"MAIN-UNCHANGED",
+          "fill changed the main send editor");
+    Check(Message(window, kQuery, 1) == rxBefore && Message(window, kQuery, 2) == txBefore,
+          "fill transmitted serial data");
+    Check(Message(GetDlgItem(window, kTxHexId), BM_GETCHECK) == hexBefore,
+          "fill changed the HEX send checkbox");
+    Check(Text(GetDlgItem(window, protocolui::Status)) ==
+              L"已填入自定义5；发送时请启用“十六进制发送”",
+          "fill guidance is missing when HEX send is disabled");
+    Message(window, WM_COMMAND,
+            MAKEWPARAM(protocolui::FillSlotFirst + kMaximumStoredCustomSlots - 1, 0), 0);
+    Check(Text(GetDlgItem(window, extension::EditFirst + kMaximumStoredCustomSlots - 1)) == expected,
+          "fill command did not reach custom slot 16");
+    Check(Message(window, kQuery, 2) == txBefore,
+          "filling custom slot 16 transmitted serial data");
+
+    SetText(window, protocolui::SlaveEdit, L"00");
+    Click(window, protocolui::Generate);
+    Check(Text(GetDlgItem(window, protocolui::ResultEdit)) == expected,
+          "invalid generation cleared the previous valid result");
+    Check(Text(GetDlgItem(window, protocolui::Status)).find(L"错误：") == 0,
+          "invalid generation did not show an error status");
+}
 }  // namespace
 
 int wmain(int argc, wchar_t** argv) {
@@ -201,6 +309,7 @@ int wmain(int argc, wchar_t** argv) {
     try {
         Start(app, argv[1]);
         CheckForm(app.window);
+        CheckInteractions(app.window);
         std::cout << "Protocol UI tests passed. Checks=" << checks << '\n';
         return 0;
     } catch (const std::exception& error) {

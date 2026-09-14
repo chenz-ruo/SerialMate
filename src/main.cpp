@@ -383,6 +383,11 @@ private:
     void UpdateProtocolForm();
     protocol::Function SelectedProtocolFunction() const;
     void SetProtocolControlsVisible(bool visible);
+    void GenerateProtocolFrame();
+    void CopyProtocolResult();
+    void ShowProtocolFillMenu();
+    void FillProtocolResultIntoCustomSlot(int slot);
+    void UpdateProtocolStatus(const std::wstring& text);
     void AppendRecord(bool receive, const std::vector<std::uint8_t>& data);
     void CopyRecords(int mode);
     void ShowCopyMenu();
@@ -433,6 +438,7 @@ private:
     std::bitset<config::kSlotCount> customDataDirty_{};
     bool loadingConfiguration_ = false;
     bool configurationSaved_ = false;
+    protocol::Result protocolResult_{};
 };
 
 HWND Application::Make(const wchar_t* cls, const wchar_t* text, DWORD style, DWORD exStyle, int id) {
@@ -722,6 +728,84 @@ void Application::UpdateProtocolForm() {
                    function == protocol::Function::WriteSingleRegister ? L"写入值" : L"寄存器数量");
     LayoutProtocolControls();
     SetProtocolControlsVisible(layout_.extensionVisible);
+}
+
+void Application::UpdateProtocolStatus(const std::wstring& text) {
+    SetWindowTextW(Get(protocolui::Status), text.c_str());
+}
+
+void Application::GenerateProtocolFrame() {
+    protocol::Request request;
+    request.function = SelectedProtocolFunction();
+    request.slave = WindowText(Get(protocolui::SlaveEdit));
+    request.address = WindowText(Get(protocolui::AddressEdit));
+    if (request.function == protocol::Function::WriteSingleRegister)
+        request.value = WindowText(Get(protocolui::QuantityEdit));
+    else
+        request.quantity = WindowText(Get(protocolui::QuantityEdit));
+    if (request.function == protocol::Function::WriteMultipleRegisters)
+        request.data = WindowText(Get(protocolui::DataEdit));
+
+    auto generated = protocol::Generate(request);
+    if (!generated) {
+        UpdateProtocolStatus(L"错误：" + generated.error);
+        return;
+    }
+    protocolResult_ = std::move(generated);
+    SetWindowTextW(Get(protocolui::ResultEdit), protocolResult_.hex.c_str());
+    const std::wstring crc = util::FormatBytes(
+        std::vector<std::uint8_t>{protocolResult_.crcLow, protocolResult_.crcHigh});
+    UpdateProtocolStatus(L"状态：" + std::to_wstring(protocolResult_.frame.size()) +
+                         L" bytes / CRC " + crc);
+}
+
+void Application::CopyProtocolResult() {
+    if (!protocolResult_) {
+        UpdateProtocolStatus(L"请先生成协议数据");
+        return;
+    }
+    if (PutClipboardText(window_, protocolResult_.hex))
+        UpdateProtocolStatus(L"已复制生成结果");
+    else
+        UpdateProtocolStatus(L"错误：无法访问剪贴板");
+}
+
+void Application::FillProtocolResultIntoCustomSlot(int slot) {
+    if (!protocolResult_) {
+        UpdateProtocolStatus(L"请先生成协议数据");
+        return;
+    }
+    if (slot < 0 || slot >= kMaximumStoredCustomSlots) return;
+    SetWindowTextW(Get(extension::EditFirst + slot), protocolResult_.hex.c_str());
+    const std::wstring target = L"已填入自定义" + std::to_wstring(slot + 1);
+    UpdateProtocolStatus(Checked(ID_TX_HEX)
+        ? target
+        : target + L"；发送时请启用“十六进制发送”");
+}
+
+void Application::ShowProtocolFillMenu() {
+    if (!protocolResult_) {
+        UpdateProtocolStatus(L"请先生成协议数据");
+        return;
+    }
+    HMENU menu = CreatePopupMenu();
+    if (!menu) {
+        UpdateProtocolStatus(L"错误：无法创建槽位菜单");
+        return;
+    }
+    for (int slot = 0; slot < kMaximumStoredCustomSlots; ++slot) {
+        const std::wstring text = L"自定义" + std::to_wstring(slot + 1);
+        AppendMenuW(menu, MF_STRING, protocolui::FillSlotFirst + slot, text.c_str());
+    }
+    RECT button{};
+    GetWindowRect(Get(protocolui::FillCustom), &button);
+    const int selected = TrackPopupMenu(menu, TPM_LEFTALIGN | TPM_TOPALIGN | TPM_RIGHTBUTTON |
+                                              TPM_RETURNCMD,
+                                        button.left, button.bottom, 0, window_, nullptr);
+    DestroyMenu(menu);
+    if (selected >= protocolui::FillSlotFirst &&
+        selected < protocolui::FillSlotFirst + kMaximumStoredCustomSlots)
+        FillProtocolResultIntoCustomSlot(selected - protocolui::FillSlotFirst);
 }
 
 void Application::Layout() {
@@ -1332,10 +1416,18 @@ void Application::Command(int id, int notification, HWND) {
         SendText(WindowText(Get(extension::EditFirst + slot)), false, slot);
         return;
     }
+    if (id >= protocolui::FillSlotFirst &&
+        id < protocolui::FillSlotFirst + kMaximumStoredCustomSlots) {
+        FillProtocolResultIntoCustomSlot(id - protocolui::FillSlotFirst);
+        return;
+    }
     switch (id) {
     case protocolui::FunctionCombo:
         if (notification == CBN_SELCHANGE) UpdateProtocolForm();
         break;
+    case protocolui::Generate: if (notification == BN_CLICKED) GenerateProtocolFrame(); break;
+    case protocolui::Copy: if (notification == BN_CLICKED) CopyProtocolResult(); break;
+    case protocolui::FillCustom: if (notification == BN_CLICKED) ShowProtocolFillMenu(); break;
     case ID_OPEN: OpenPort(); break;
     case ID_CLOSE: ClosePort(); break;
     case ID_SEND: SendData(); break;
