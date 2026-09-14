@@ -439,6 +439,7 @@ private:
     bool loadingConfiguration_ = false;
     bool configurationSaved_ = false;
     protocol::Result protocolResult_{};
+    std::bitset<config::kSlotCount> protocolHexCustomData_{};
 };
 
 HWND Application::Make(const wchar_t* cls, const wchar_t* text, DWORD style, DWORD exStyle, int id) {
@@ -777,6 +778,7 @@ void Application::FillProtocolResultIntoCustomSlot(int slot) {
     }
     if (slot < 0 || slot >= kMaximumStoredCustomSlots) return;
     SetWindowTextW(Get(extension::EditFirst + slot), protocolResult_.hex.c_str());
+    protocolHexCustomData_.set(static_cast<std::size_t>(slot), !Checked(ID_TX_HEX));
     const std::wstring target = L"已填入自定义" + std::to_wstring(slot + 1);
     UpdateProtocolStatus(Checked(ID_TX_HEX)
         ? target
@@ -1179,8 +1181,12 @@ void Application::ToggleHexEditorMode() {
         }
         std::array<std::vector<std::uint8_t>, config::kSlotCount> customBytes;
         for (std::size_t slot = 0; slot < config::kSlotCount; ++slot) {
-            if (!textcodec::Encode(WindowText(Get(extension::EditFirst + static_cast<int>(slot))),
-                                   encoding_, customBytes[slot], error)) {
+            const std::wstring customText =
+                WindowText(Get(extension::EditFirst + static_cast<int>(slot)));
+            const bool converted = protocolHexCustomData_.test(slot)
+                ? util::ParseHex(customText, customBytes[slot], error)
+                : textcodec::Encode(customText, encoding_, customBytes[slot], error);
+            if (!converted) {
                 MessageBoxW(window_, error.c_str(),
                             (L"自定义数据 " + std::to_wstring(slot + 1) + L" 编码转换失败").c_str(),
                             MB_OK | MB_ICONWARNING);
@@ -1193,6 +1199,7 @@ void Application::ToggleHexEditorMode() {
         for (std::size_t slot = 0; slot < config::kSlotCount; ++slot)
             SetWindowTextW(Get(extension::EditFirst + static_cast<int>(slot)),
                            util::FormatBytes(customBytes[slot]).c_str());
+        protocolHexCustomData_.reset();
     } else {
         std::vector<std::uint8_t> parsed;
         std::wstring error;
@@ -1205,6 +1212,7 @@ void Application::ToggleHexEditorMode() {
             if (util::ParseHex(WindowText(customEdit), parsed, error))
                 SetWindowTextW(customEdit, textcodec::Decode(parsed, encoding_).c_str());
         }
+        protocolHexCustomData_.reset();
     }
 }
 
@@ -1405,6 +1413,7 @@ void Application::Command(int id, int notification, HWND) {
     if (id >= extension::EditFirst && id < extension::EditFirst + kMaximumStoredCustomSlots &&
         notification == EN_CHANGE) {
         const std::size_t slot = static_cast<std::size_t>(id - extension::EditFirst);
+        protocolHexCustomData_.reset(slot);
         NormalizeCustomHexEditor(static_cast<int>(slot));
         customData_.customData[slot] = WindowText(Get(id));
         if (!loadingConfiguration_) customDataDirty_.set(slot);

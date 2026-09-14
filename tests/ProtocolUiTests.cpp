@@ -286,6 +286,10 @@ void CheckInteractions(HWND window) {
     Check(Text(GetDlgItem(window, protocolui::Status)) ==
               L"已填入自定义5；发送时请启用“十六进制发送”",
           "fill guidance is missing when HEX send is disabled");
+    Message(GetDlgItem(window, kTxHexId), BM_SETCHECK, BST_CHECKED, 0);
+    Click(window, kTxHexId);
+    Check(Text(GetDlgItem(window, extension::EditFirst + 4)) == expected,
+          "enabling HEX after protocol fill re-encoded the generated frame as text");
     Message(window, WM_COMMAND,
             MAKEWPARAM(protocolui::FillSlotFirst + kMaximumStoredCustomSlots - 1, 0), 0);
     Check(Text(GetDlgItem(window, extension::EditFirst + kMaximumStoredCustomSlots - 1)) == expected,
