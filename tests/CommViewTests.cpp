@@ -379,6 +379,29 @@ void CheckSimpleContinuity() {
     DestroyWindow(window); DestroyWindow(parent);
 }
 
+void CheckSimpleTextLineEndings() {
+    comm::RecordBuffer buffer;
+    buffer.Add(comm::Direction::Rx, L"2026-09-14 06:32:42.059",
+               {0x41, 0x0d, 0x0a, 0x42, 0x0d, 0x43, 0x0a, 0x44});
+    HWND parent = CreateParent(GetModuleHandleW(nullptr));
+    comm::RecordView view(buffer);
+    HWND window = view.Create(parent, 7006);
+    Check(window != nullptr, L"传统文本换行视图创建");
+    if (!window) { DestroyWindow(parent); return; }
+    SetWindowPos(window, nullptr, 0, 0, 900, 400, SWP_NOZORDER | SWP_NOACTIVATE);
+    view.SetSimpleMode(true);
+    view.SetReceiveHex(false);
+    view.SetTimestamps(true);
+    view.Refresh(true);
+    Check(view.Copy(comm::CopyFormat::Full, false) == L"[06:32:42.0]←RX\r\nABCD",
+          L"传统文本有时间戳时CR LF不显示");
+    view.SetTimestamps(false);
+    view.Refresh(true);
+    Check(view.Copy(comm::CopyFormat::Full, false) == L"A\r\nB\r\nC\r\nD",
+          L"传统文本无时间戳时CR LF作为换行");
+    DestroyWindow(window); DestroyWindow(parent);
+}
+
 void CheckSimpleSelection() {
     comm::RecordBuffer buffer;
     buffer.AddMessage(comm::Direction::Notice, L"", L"ABCDE");
@@ -437,6 +460,7 @@ int wmain() {
     CheckSystemRecordAlignment();
     CheckHighLoad();
     CheckSimpleContinuity();
+    CheckSimpleTextLineEndings();
     CheckSimpleSelection();
     if (failures == 0) std::wcout << L"All communication view tests passed.\n";
     return failures == 0 ? 0 : 1;

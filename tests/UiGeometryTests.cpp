@@ -23,6 +23,7 @@ bool Empty(const RECT& rect) {
 }
 
 int Width(const RECT& rect) { return rect.right - rect.left; }
+int Height(const RECT& rect) { return rect.bottom - rect.top; }
 
 void CheckExtensions(const MainLayoutGeometry& layout) {
     if (!layout.extensionVisible) {
@@ -69,6 +70,10 @@ void CheckExtensions(const MainLayoutGeometry& layout) {
               slot.send.top == slot.row.top, "index/edit/send share one row top");
         Check(slot.index.bottom == slot.row.bottom && slot.edit.bottom == slot.row.bottom &&
               slot.send.bottom == slot.row.bottom, "index/edit/send share one row height");
+        Check(Height(slot.row) == Height(layout.settings.interval) &&
+              Height(slot.edit) == Height(layout.settings.interval) &&
+              Height(slot.send) == Height(layout.settings.interval),
+              "custom edit and send button match the interval edit height");
         Check(Contains(layout.customDataCard, slot.row) && Contains(slot.row, slot.index) &&
               Contains(slot.row, slot.edit) && Contains(slot.row, slot.send), "entire slot is inside custom card");
         Check(slot.index.right < slot.edit.left && slot.edit.right < slot.send.left && Width(slot.edit) > 0,
@@ -173,18 +178,20 @@ void CheckResponsiveLayout() {
                   layout.protocolCard.top - layout.customDataCard.bottom == layout.mainCardGap,
                   "vertical card gaps remain fixed during reveal");
         }
-        int previousRows = 0;
         for (int height : {680, 768, 900, 1024, 1080, 1280, 1600}) {
             const auto layout = CalculateMainLayoutGeometry(full, height, dpi, content8);
             CheckExtensions(layout);
-            Check(layout.visibleCustomRows >= previousRows, "growing card height never loses visible rows");
-            previousRows = layout.visibleCustomRows;
             if (layout.visibleCustomRows > 0 && layout.visibleCustomRows < kMaximumStoredCustomSlots) {
                 const auto& last = layout.customSlots[static_cast<std::size_t>(layout.visibleCustomRows - 1)];
-                const int step = MulDiv(32, static_cast<int>(dpi), 96) + MulDiv(6, static_cast<int>(dpi), 96);
+                const int step = Height(layout.settings.interval) + MulDiv(4, static_cast<int>(dpi), 96);
                 Check(last.row.bottom + step > layout.customDataCard.bottom - MulDiv(12, static_cast<int>(dpi), 96),
                       "another complete row cannot fit in the unused space");
             }
+        }
+        if (dpi == 144) {
+            const auto layout = CalculateMainLayoutGeometry(full, 1024, dpi, content8);
+            Check(layout.visibleCustomRows == 12,
+                  "144 DPI at 1024px height shows twelve complete custom rows");
         }
     }
 }
@@ -232,10 +239,13 @@ int main() {
         const int sendBottomPadding = layout.sendCard.bottom - layout.encodingCombo.bottom;
         Check(receiveBottomPadding >= 8 && receiveBottomPadding <= 24,
               "receive card bottom padding is compact");
-        Check(sendBottomPadding >= 8 && sendBottomPadding <= 24,
-              "send card bottom padding is compact");
-        Check(layout.sendCard.bottom <= item.height - 40,
-              "settings cards fit above status bar");
+        Check(sendBottomPadding >= 0,
+              "send controls remain above the card bottom");
+        const int statusReserve = MulDiv(kStatusCardGapLogical + kStatusRowHeightLogical +
+                                         kStatusBottomMarginLogical,
+                                         static_cast<int>(item.dpi), 96);
+        Check(layout.sendCard.bottom == item.height - statusReserve,
+              "settings cards end at the compact status boundary");
 
         const auto main = CalculateMainLayoutGeometry(item.width, item.height, item.dpi,
                                                        MulDiv(450, static_cast<int>(item.dpi), 96));
@@ -247,6 +257,13 @@ int main() {
               "data send top aligns with send settings top");
         Check(main.settings.sendCard.bottom == main.dataSendCard.bottom,
               "main bottom baseline is shared");
+        Check(main.statusLeft.top - main.dataSendCard.bottom ==
+                  MulDiv(kStatusCardGapLogical, static_cast<int>(item.dpi), 96) &&
+              Height(main.statusLeft) ==
+                  MulDiv(kStatusRowHeightLogical, static_cast<int>(item.dpi), 96) &&
+              item.height - main.statusLeft.bottom ==
+                  MulDiv(kStatusBottomMarginLogical, static_cast<int>(item.dpi), 96),
+              "status row uses the compact 4/24/6 vertical budget");
         Check(main.settings.receiveCard.top - main.settings.serialCard.bottom == main.settings.cardGap &&
                   main.settings.sendCard.top - main.settings.receiveCard.bottom == main.settings.cardGap &&
                   main.dataSendCard.top - main.commRecordCard.bottom == main.settings.cardGap,

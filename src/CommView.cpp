@@ -14,6 +14,20 @@ std::wstring DisplayTimestamp(const std::wstring& timestamp) {
     if (dot != std::wstring::npos && dot + 2 < value.size()) value.resize(dot + 2);
     return value;
 }
+std::wstring DecodeSimpleText(const std::vector<std::uint8_t>& bytes,
+                              textcodec::TextEncoding encoding, bool timestamps) {
+    std::wstring result;
+    std::size_t segmentStart = 0;
+    for (std::size_t index = 0; index < bytes.size(); ++index) {
+        if (bytes[index] != '\r' && bytes[index] != '\n') continue;
+        result += DisplayTextRange(bytes, segmentStart, index - segmentStart, encoding);
+        if (!timestamps) result.push_back(L'\n');
+        if (bytes[index] == '\r' && index + 1 < bytes.size() && bytes[index + 1] == '\n') ++index;
+        segmentStart = index + 1;
+    }
+    result += DisplayTextRange(bytes, segmentStart, bytes.size() - segmentStart, encoding);
+    return result;
+}
 bool Clipboard(HWND owner, const std::wstring& text) {
     if (text.empty()) return false;
     const SIZE_T size = (text.size() + 1) * sizeof(wchar_t);
@@ -348,18 +362,27 @@ void RecordView::BuildSimpleLines() {
             }
             if (!timestamps_ && !simpleLines_.empty() && !simpleLines_.back().header &&
                 !simpleLines_.back().text.empty() && !payload.empty()) payload.insert(payload.begin(), L' ');
-        } else payload = DisplayText(record.rawBytes, encoding_);
+        } else payload = DecodeSimpleText(record.rawBytes, encoding_, timestamps_);
         std::size_t offset = 0;
         while (offset < payload.size()) {
+            if (payload[offset] == L'\n') {
+                if (simpleLines_.empty() || simpleLines_.back().header)
+                    simpleLines_.push_back({L"", record.id, record.id, false, false, record.direction});
+                simpleLines_.push_back({L"", record.id, record.id, false, false, record.direction});
+                ++offset;
+                continue;
+            }
             if (simpleLines_.empty() || simpleLines_.back().header)
                 simpleLines_.push_back({L"", record.id, record.id, false, false, record.direction});
             auto& line = simpleLines_.back();
+            const auto lineEnd = payload.find(L'\n', offset);
+            const auto remaining = (lineEnd == std::wstring::npos ? payload.size() : lineEnd) - offset;
             SIZE occupied{};
             GetTextExtentPoint32W(dc, line.text.data(), static_cast<int>(line.text.size()), &occupied);
             int fit = 0; SIZE extent{};
-            GetTextExtentExPointW(dc, payload.data() + offset, static_cast<int>(payload.size() - offset),
+            GetTextExtentExPointW(dc, payload.data() + offset, static_cast<int>(remaining),
                                  std::max(0, width - static_cast<int>(occupied.cx)), &fit, nullptr, &extent);
-            if (fit > 0 && offset + fit < payload.size() &&
+            if (fit > 0 && static_cast<std::size_t>(fit) < remaining &&
                 payload[offset + fit - 1] >= 0xd800 && payload[offset + fit - 1] <= 0xdbff) --fit;
             if (fit == 0 && !line.text.empty()) {
                 simpleLines_.push_back({L"", record.id, record.id, false, false, record.direction});

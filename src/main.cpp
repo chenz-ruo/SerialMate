@@ -190,6 +190,92 @@ LRESULT CALLBACK FlatEditSubclass(HWND window, UINT message, WPARAM wParam, LPAR
     return DefSubclassProc(window, message, wParam, lParam);
 }
 
+void CenterSingleLineEditText(HWND window) {
+    RECT client{};
+    if (!GetClientRect(window, &client)) return;
+    HDC dc = GetDC(window);
+    if (!dc) return;
+    const auto font = reinterpret_cast<HFONT>(SendMessageW(window, WM_GETFONT, 0, 0));
+    const HGDIOBJ oldFont = font ? SelectObject(dc, font) : nullptr;
+    TEXTMETRICW metrics{};
+    const bool measured = GetTextMetricsW(dc, &metrics) != FALSE;
+    if (oldFont) SelectObject(dc, oldFont);
+    ReleaseDC(window, dc);
+    if (!measured) return;
+    const int height = client.bottom - client.top;
+    const int lineHeight = metrics.tmHeight + metrics.tmExternalLeading;
+    const int verticalInset = std::max(2, (height - lineHeight) / 2);
+    RECT format{client.left + 2, client.top + verticalInset,
+                std::max(client.left + 2, client.right - 2),
+                std::max(client.top + verticalInset, client.bottom - verticalInset)};
+    SendMessageW(window, EM_SETRECTNP, 0, reinterpret_cast<LPARAM>(&format));
+}
+
+LRESULT CALLBACK IntervalEditSubclass(HWND window, UINT message, WPARAM wParam, LPARAM lParam,
+                                      UINT_PTR subclassId, DWORD_PTR) {
+    if (message == WM_CHAR && (wParam == L'\r' || wParam == L'\n')) return 0;
+    if (message == WM_SIZE || message == WM_SETFONT) {
+        const LRESULT result = DefSubclassProc(window, message, wParam, lParam);
+        CenterSingleLineEditText(window);
+        return result;
+    }
+    if (message == WM_PAINT || message == WM_NCPAINT) {
+        const LRESULT result = DefSubclassProc(window, message, wParam, lParam);
+        DrawFlatEditBorder(window);
+        return result;
+    }
+    if (message == WM_NCDESTROY) RemoveWindowSubclass(window, IntervalEditSubclass, subclassId);
+    return DefSubclassProc(window, message, wParam, lParam);
+}
+
+LRESULT CALLBACK CustomEditSubclass(HWND window, UINT message, WPARAM wParam, LPARAM lParam,
+                                    UINT_PTR subclassId, DWORD_PTR) {
+    const HWND parent = GetParent(window);
+    const bool hexMode = parent && IsDlgButtonChecked(parent, ID_TX_HEX) == BST_CHECKED;
+    if (message == WM_CHAR) {
+        if (wParam == L'\r' || wParam == L'\n') return 0;
+        if (hexMode && wParam >= 0x20 && !IsHexDigit(static_cast<wchar_t>(wParam))) return 0;
+    }
+    if (hexMode && message == WM_PASTE) {
+        if (!OpenClipboard(window)) return 0;
+        std::wstring pasted;
+        if (HANDLE data = GetClipboardData(CF_UNICODETEXT)) {
+            if (const auto* text = static_cast<const wchar_t*>(GlobalLock(data))) {
+                pasted = text;
+                GlobalUnlock(data);
+            }
+        }
+        CloseClipboard();
+        const std::wstring normalized = NormalizeHexEditorText(pasted);
+        SendMessageW(window, EM_REPLACESEL, TRUE, reinterpret_cast<LPARAM>(normalized.c_str()));
+        return 0;
+    }
+    if (message == WM_SIZE || message == WM_SETFONT || message == WM_SHOWWINDOW) {
+        const LRESULT result = DefSubclassProc(window, message, wParam, lParam);
+        CenterSingleLineEditText(window);
+        return result;
+    }
+    if (message == WM_PAINT || message == WM_NCPAINT) {
+        const LRESULT result = DefSubclassProc(window, message, wParam, lParam);
+        DrawFlatEditBorder(window);
+        return result;
+    }
+    if (!hexMode && message == WM_CHAR) {
+        const LRESULT result = DefSubclassProc(window, message, wParam, lParam);
+        RedrawWindow(window, nullptr, nullptr,
+                     RDW_INVALIDATE | RDW_ERASE | RDW_UPDATENOW | RDW_ALLCHILDREN);
+        return result;
+    }
+    if (message == WM_KEYUP && (wParam == VK_BACK || wParam == VK_DELETE)) {
+        const LRESULT result = DefSubclassProc(window, message, wParam, lParam);
+        RedrawWindow(window, nullptr, nullptr,
+                     RDW_INVALIDATE | RDW_ERASE | RDW_UPDATENOW | RDW_ALLCHILDREN);
+        return result;
+    }
+    if (message == WM_NCDESTROY) RemoveWindowSubclass(window, CustomEditSubclass, subclassId);
+    return DefSubclassProc(window, message, wParam, lParam);
+}
+
 LRESULT CALLBACK SendEditSubclass(HWND window, UINT message, WPARAM wParam, LPARAM lParam,
                                   UINT_PTR subclassId, DWORD_PTR) {
     HWND parent = GetParent(window);
@@ -291,6 +377,7 @@ private:
     void StopTimedSendOnError(const std::wstring& reason);
     void ToggleHexEditorMode();
     void NormalizeHexEditor();
+    void NormalizeCustomHexEditor(int slot);
     void AppendRecord(bool receive, const std::vector<std::uint8_t>& data);
     void CopyRecords(int mode);
     void ShowCopyMenu();
@@ -333,6 +420,7 @@ private:
     comm::RecordBuffer records_;
     comm::RecordView recordView_{records_};
     bool normalizingHex_ = false;
+    bool normalizingCustomHex_ = false;
     std::vector<std::uint8_t> sendRawSnapshot_;
     MainLayoutGeometry layout_{};
     std::unique_ptr<config::ConfigStore> configStore_;
@@ -408,8 +496,11 @@ void Application::Create() {
     Label(L"发送设置", 9003); SetFont(Get(9003), titleFont_);
     Check(L"十六进制发送", ID_TX_HEX); Check(L"发送新行 (CR)", ID_TX_CR);
     Check(L"发送新行 (LF)", ID_TX_LF); Check(L"定时发送", ID_TIMED);
-    auto interval = Make(L"EDIT", L"1000", ES_NUMBER | ES_CENTER | WS_TABSTOP, 0, ID_INTERVAL);
-    SetWindowSubclass(interval, FlatEditSubclass, 1, 0);
+    auto interval = Make(L"EDIT", L"1000",
+                         ES_NUMBER | ES_CENTER | ES_MULTILINE | ES_AUTOHSCROLL | WS_TABSTOP,
+                         0, ID_INTERVAL);
+    SetWindowSubclass(interval, IntervalEditSubclass, 1, 0);
+    CenterSingleLineEditText(interval);
     SendMessageW(interval, EM_SETLIMITTEXT, 7, 0); Label(L"ms", 9010);
     Label(L"文本编码（发送/显示）", 9011); auto encoding = Combo(ID_ENCODING);
     AddComboItems(encoding, {textcodec::Name(textcodec::TextEncoding::Utf8),
@@ -441,8 +532,10 @@ void Application::Create() {
         const auto number = std::to_wstring(i + 1);
         HWND index = Label(number.c_str(), extension::IndexFirst + i);
         SetWindowLongPtrW(index, GWL_STYLE, GetWindowLongPtrW(index, GWL_STYLE) | SS_CENTERIMAGE);
-        HWND edit = Make(L"EDIT", L"", ES_AUTOHSCROLL | WS_TABSTOP, 0, extension::EditFirst + i);
-        SetWindowSubclass(edit, FlatEditSubclass, 1, 0);
+        HWND edit = Make(L"EDIT", L"", ES_MULTILINE | ES_AUTOHSCROLL | WS_TABSTOP,
+                         0, extension::EditFirst + i);
+        SetWindowSubclass(edit, CustomEditSubclass, 1, 0);
+        CenterSingleLineEditText(edit);
         HWND send = Button(L"发送", extension::SendFirst + i);
         SendMessageW(edit, EM_SETLIMITTEXT, 4096, 0);
         ShowWindow(index, SW_HIDE);
@@ -488,9 +581,7 @@ void Application::Layout() {
     auto& settingsGeometry_ = layout_.settings;
     const auto& logCard_ = layout_.commRecordCard;
     const auto& sendCard_ = layout_.dataSendCard;
-    const int pad = geometry.serialColumn.left;
     const int gap = geometry.horizontalGap;
-    const int statusH = scale(40);
     const int rightX = geometry.rightX;
     const int rightW = geometry.rightWidth;
     // RecordView owns the canonical monospace HFONT and recreates it when the
@@ -604,6 +695,9 @@ void Application::Layout() {
         if (!visible && GetFocus() == control) SetFocus(Get(ID_SEND_EDIT));
         if (visible) moveRect(control, rect);
         ShowWindow(control, visible ? SW_SHOWNA : SW_HIDE);
+        if (visible && id >= extension::EditFirst &&
+            id < extension::EditFirst + kMaximumStoredCustomSlots)
+            CenterSingleLineEditText(control);
     };
     placeExtension(extension::CustomTitle, geometry.customDataTitle, !IsRectEmpty(&geometry.customDataTitle));
     placeExtension(extension::ProtocolTitle, geometry.protocolTitle, !IsRectEmpty(&geometry.protocolTitle));
@@ -617,8 +711,8 @@ void Application::Layout() {
         placeExtension(extension::SendFirst + i, slot.send, visible);
     }
 
-    MoveWindow(Get(ID_STATUS_LEFT), pad, height - statusH, width / 2, statusH, TRUE);
-    MoveWindow(Get(ID_STATUS_RIGHT), width / 2, height - statusH, width / 2 - pad, statusH, TRUE);
+    moveRect(Get(ID_STATUS_LEFT), geometry.statusLeft);
+    moveRect(Get(ID_STATUS_RIGHT), geometry.statusRight);
     InvalidateRect(window_, nullptr, TRUE);
 }
 
@@ -819,6 +913,20 @@ void Application::NormalizeHexEditor() {
     normalizingHex_ = false;
 }
 
+void Application::NormalizeCustomHexEditor(int slot) {
+    if (normalizingCustomHex_ || !Checked(ID_TX_HEX)) return;
+    HWND edit = Get(extension::EditFirst + slot);
+    const std::wstring current = WindowText(edit);
+    const std::wstring normalized = NormalizeHexEditorText(current);
+    if (current == normalized) return;
+    normalizingCustomHex_ = true;
+    SetWindowTextW(edit, normalized.c_str());
+    SendMessageW(edit, EM_SETSEL, normalized.size(), normalized.size());
+    RedrawWindow(edit, nullptr, nullptr,
+                 RDW_INVALIDATE | RDW_ERASE | RDW_UPDATENOW | RDW_ALLCHILDREN);
+    normalizingCustomHex_ = false;
+}
+
 void Application::ToggleHexEditorMode() {
     HWND edit = Get(ID_SEND_EDIT);
     if (Checked(ID_TX_HEX)) {
@@ -828,14 +936,33 @@ void Application::ToggleHexEditorMode() {
             CheckDlgButton(window_, ID_TX_HEX, BST_UNCHECKED);
             return;
         }
+        std::array<std::vector<std::uint8_t>, config::kSlotCount> customBytes;
+        for (std::size_t slot = 0; slot < config::kSlotCount; ++slot) {
+            if (!textcodec::Encode(WindowText(Get(extension::EditFirst + static_cast<int>(slot))),
+                                   encoding_, customBytes[slot], error)) {
+                MessageBoxW(window_, error.c_str(),
+                            (L"自定义数据 " + std::to_wstring(slot + 1) + L" 编码转换失败").c_str(),
+                            MB_OK | MB_ICONWARNING);
+                CheckDlgButton(window_, ID_TX_HEX, BST_UNCHECKED);
+                return;
+            }
+        }
         SetWindowTextW(edit, util::FormatBytes(sendRawSnapshot_).c_str());
         SendMessageW(edit, EM_SETSEL, static_cast<WPARAM>(-1), static_cast<LPARAM>(-1));
+        for (std::size_t slot = 0; slot < config::kSlotCount; ++slot)
+            SetWindowTextW(Get(extension::EditFirst + static_cast<int>(slot)),
+                           util::FormatBytes(customBytes[slot]).c_str());
     } else {
         std::vector<std::uint8_t> parsed;
         std::wstring error;
         if (util::ParseHex(WindowText(edit), parsed, error)) {
             sendRawSnapshot_ = parsed;
             SetWindowTextW(edit, textcodec::Decode(parsed, encoding_).c_str());
+        }
+        for (std::size_t slot = 0; slot < config::kSlotCount; ++slot) {
+            HWND customEdit = Get(extension::EditFirst + static_cast<int>(slot));
+            if (util::ParseHex(WindowText(customEdit), parsed, error))
+                SetWindowTextW(customEdit, textcodec::Decode(parsed, encoding_).c_str());
         }
     }
 }
@@ -1037,6 +1164,7 @@ void Application::Command(int id, int notification, HWND) {
     if (id >= extension::EditFirst && id < extension::EditFirst + kMaximumStoredCustomSlots &&
         notification == EN_CHANGE) {
         const std::size_t slot = static_cast<std::size_t>(id - extension::EditFirst);
+        NormalizeCustomHexEditor(static_cast<int>(slot));
         customData_.customData[slot] = WindowText(Get(id));
         if (!loadingConfiguration_) customDataDirty_.set(slot);
         return;

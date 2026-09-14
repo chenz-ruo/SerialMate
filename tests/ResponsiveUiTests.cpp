@@ -10,10 +10,14 @@
 #include <stdexcept>
 #include <string>
 #include <thread>
+#include <vector>
 
 namespace {
 constexpr UINT kQuery = WM_APP + 100;
 constexpr int kIntervalEditId = 121;
+constexpr int kTxHexId = 117;
+constexpr int kStatusLeftId = 132;
+constexpr int kStatusRightId = 133;
 int checks = 0;
 
 void Check(bool condition, const char* message) {
@@ -100,6 +104,73 @@ void CheckFlatEdit(HWND edit, const char* message) {
     Check((GetWindowLongPtrW(edit, GWL_EXSTYLE) & WS_EX_CLIENTEDGE) == 0, message);
 }
 
+std::vector<std::uint32_t> CaptureClientPixels(HWND window) {
+    RECT client{};
+    Check(GetClientRect(window, &client) != FALSE, "control client rectangle is unavailable");
+    const int width = client.right;
+    const int height = client.bottom;
+    HDC source = GetDC(window);
+    HDC memory = CreateCompatibleDC(source);
+    HBITMAP bitmap = CreateCompatibleBitmap(source, width, height);
+    HGDIOBJ previous = SelectObject(memory, bitmap);
+    Check(BitBlt(memory, 0, 0, width, height, source, 0, 0, SRCCOPY) != FALSE,
+          "control pixels could not be captured");
+    std::vector<std::uint32_t> pixels(static_cast<std::size_t>(width * height));
+    BITMAPINFO info{};
+    info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    info.bmiHeader.biWidth = width;
+    info.bmiHeader.biHeight = -height;
+    info.bmiHeader.biPlanes = 1;
+    info.bmiHeader.biBitCount = 32;
+    info.bmiHeader.biCompression = BI_RGB;
+    Check(GetDIBits(memory, bitmap, 0, height, pixels.data(), &info, DIB_RGB_COLORS) != 0,
+          "captured control pixels could not be read");
+    SelectObject(memory, previous);
+    DeleteObject(bitmap);
+    DeleteDC(memory);
+    ReleaseDC(window, source);
+    return pixels;
+}
+
+void ResizeClient(HWND window, int width, int height) {
+    RECT outer{}, client{};
+    Check(GetWindowRect(window, &outer) != FALSE && GetClientRect(window, &client) != FALSE,
+          "window rectangles are unavailable for resize");
+    Check(SetWindowPos(window, nullptr, outer.left, outer.top,
+                       width + (outer.right - outer.left) - client.right,
+                       height + (outer.bottom - outer.top) - client.bottom,
+                       SWP_NOACTIVATE | SWP_NOZORDER) != FALSE,
+          "window could not be resized for custom data input verification");
+    Message(window, WM_NULL);
+}
+
+void CheckVerticallyCenteredEdit(HWND edit, const char* message) {
+    Check(RedrawWindow(edit, nullptr, nullptr, RDW_INVALIDATE | RDW_UPDATENOW) != FALSE,
+          "edit could not be redrawn for alignment verification");
+    RECT client{};
+    RECT format{};
+    Check(GetClientRect(edit, &client) != FALSE, "edit client rectangle is unavailable");
+    Message(edit, EM_GETRECT, 0, reinterpret_cast<LPARAM>(&format));
+    const int topInset = format.top - client.top;
+    const int bottomInset = client.bottom - format.bottom;
+    Check(topInset >= 2 && bottomInset >= 2 && topInset - bottomInset <= 1 &&
+          bottomInset - topInset <= 1, message);
+}
+
+void CheckEditVerticalAlignmentMatches(HWND edit, HWND reference, const char* message) {
+    Check(RedrawWindow(edit, nullptr, nullptr, RDW_INVALIDATE | RDW_UPDATENOW) != FALSE &&
+          RedrawWindow(reference, nullptr, nullptr, RDW_INVALIDATE | RDW_UPDATENOW) != FALSE,
+          "edits could not be redrawn for alignment comparison");
+    RECT editClient{}, editFormat{}, referenceClient{}, referenceFormat{};
+    Check(GetClientRect(edit, &editClient) != FALSE && GetClientRect(reference, &referenceClient) != FALSE,
+          "edit client rectangles are unavailable");
+    Message(edit, EM_GETRECT, 0, reinterpret_cast<LPARAM>(&editFormat));
+    Message(reference, EM_GETRECT, 0, reinterpret_cast<LPARAM>(&referenceFormat));
+    Check(editFormat.top - editClient.top == referenceFormat.top - referenceClient.top &&
+          editClient.bottom - editFormat.bottom == referenceClient.bottom - referenceFormat.bottom,
+          message);
+}
+
 void CheckWindow(HWND window, const MainLayoutGeometry& geometry, bool report) {
     const auto query = [&](WPARAM key) { return Message(window, kQuery, key); };
     Check(query(40) == (geometry.extensionVisible ? 1 : 0) && query(49) == static_cast<LRESULT>(geometry.phase),
@@ -115,6 +186,27 @@ void CheckWindow(HWND window, const MainLayoutGeometry& geometry, bool report) {
           query(30) == geometry.mainCardGap, "main card geometry mismatch");
     Check(query(27) == query(23), "actual communication bottom does not align with receive settings");
     Check(query(28) == query(24), "actual data send top does not align with send settings");
+    const auto statusLeft = ChildRect(window, GetDlgItem(window, kStatusLeftId));
+    const auto statusRight = ChildRect(window, GetDlgItem(window, kStatusRightId));
+    RECT statusClient{};
+    Check(GetClientRect(window, &statusClient) != FALSE, "main client rectangle is unavailable");
+    const int expectedStatusGap = MulDiv(4, static_cast<int>(GetDpiForWindow(window)), 96);
+    const int expectedStatusHeight = MulDiv(24, static_cast<int>(GetDpiForWindow(window)), 96);
+    const int expectedBottomMargin = MulDiv(6, static_cast<int>(GetDpiForWindow(window)), 96);
+    Check(EqualRect(&statusLeft, &geometry.statusLeft) != FALSE &&
+          EqualRect(&statusRight, &geometry.statusRight) != FALSE,
+          "status controls differ from MainLayoutGeometry");
+    Check(statusLeft.top == geometry.dataSendCard.bottom + expectedStatusGap &&
+          statusRight.top == statusLeft.top,
+          "status row does not keep the compact gap below the bottom cards");
+    Check(statusLeft.bottom - statusLeft.top == expectedStatusHeight &&
+          statusRight.bottom - statusRight.top == expectedStatusHeight,
+          "status row does not keep the compact fixed height");
+    Check(statusLeft.bottom <= statusClient.bottom && statusRight.bottom <= statusClient.bottom,
+          "status row extends beyond the client area");
+    Check(statusClient.bottom - statusLeft.bottom == expectedBottomMargin &&
+          statusClient.bottom - statusRight.bottom == expectedBottomMargin,
+          "status row does not keep the compact bottom margin");
     CheckControl(window, 100, geometry.openButton, true);
     CheckControl(window, 101, geometry.closeButton, true);
     CheckControl(window, 102, geometry.newButton, true);
@@ -131,12 +223,23 @@ void CheckWindow(HWND window, const MainLayoutGeometry& geometry, bool report) {
         Check(query(47) == query(24), "actual protocol top does not align with send settings");
     CheckControl(window, extension::CustomTitle, geometry.customDataTitle, !IsRectEmpty(&geometry.customDataTitle));
     CheckControl(window, extension::ProtocolTitle, geometry.protocolTitle, !IsRectEmpty(&geometry.protocolTitle));
+    const auto intervalRect = ChildRect(window, GetDlgItem(window, kIntervalEditId));
     for (int i = 0; i < kMaximumStoredCustomSlots; ++i) {
         const auto& row = geometry.customSlots[static_cast<std::size_t>(i)];
         const bool visible = i < geometry.visibleCustomRows;
         CheckControl(window, extension::IndexFirst + i, row.index, visible);
         CheckControl(window, extension::EditFirst + i, row.edit, visible);
         CheckControl(window, extension::SendFirst + i, row.send, visible);
+        if (visible) {
+            const HWND edit = GetDlgItem(window, extension::EditFirst + i);
+            const auto editRect = ChildRect(window, edit);
+            const auto sendRect = ChildRect(window, GetDlgItem(window, extension::SendFirst + i));
+            Check(editRect.bottom - editRect.top == intervalRect.bottom - intervalRect.top &&
+                  sendRect.bottom - sendRect.top == intervalRect.bottom - intervalRect.top,
+                  "custom edit and send button do not match the interval edit height");
+            CheckEditVerticalAlignmentMatches(edit, GetDlgItem(window, kIntervalEditId),
+                                              "custom data text alignment differs from the interval edit");
+        }
     }
     const auto bytes = query(9);
     Check(bytes == 8 || bytes == 16 || bytes == 32, "bytes per row left the 8/16/32 candidates");
@@ -199,8 +302,12 @@ void Run(HWND window) {
     Message(window, WM_COPYDATA, 0, reinterpret_cast<LPARAM>(&probe));
     std::array<std::array<HWND, 3>, kMaximumStoredCustomSlots> handles{};
     std::set<HWND> unique;
-    CheckFlatEdit(GetDlgItem(window, kIntervalEditId),
+    HWND intervalEdit = GetDlgItem(window, kIntervalEditId);
+    CheckFlatEdit(intervalEdit,
                   "timed-send interval edit retained native client edge");
+    Check((GetWindowLongPtrW(intervalEdit, GWL_STYLE) & ES_CENTER) != 0,
+          "timed-send interval is not horizontally centered");
+    CheckVerticallyCenteredEdit(intervalEdit, "timed-send interval text is not vertically centered");
     const std::array<int, 3> firstIds{extension::IndexFirst, extension::EditFirst, extension::SendFirst};
     const std::array<const wchar_t*, 3> classes{L"Static", L"Edit", L"Button"};
     for (int i = 0; i < kMaximumStoredCustomSlots; ++i) {
@@ -219,6 +326,41 @@ void Run(HWND window) {
         Message(handles[static_cast<std::size_t>(i)][1], WM_SETTEXT, 0, reinterpret_cast<LPARAM>(sentinel.c_str()));
     }
     Check(unique.size() == 48, "all 16 slots must exist before any resize");
+    ResizeClient(window, fullWidth, startupClient.bottom);
+    Message(handles[0][1], WM_SETTEXT, 0, reinterpret_cast<LPARAM>(L"WWWWWWWW"));
+    SetFocus(handles[0][1]);
+    Message(handles[0][1], EM_SETSEL, 0, -1);
+    Message(handles[0][1], WM_CHAR, L'i', 1);
+    HideCaret(handles[0][1]);
+    const auto incrementalPixels = CaptureClientPixels(handles[0][1]);
+    Check(RedrawWindow(handles[0][1], nullptr, nullptr,
+                       RDW_INVALIDATE | RDW_ERASE | RDW_UPDATENOW) != FALSE,
+          "custom data edit could not be redrawn for overlap verification");
+    HideCaret(handles[0][1]);
+    Check(incrementalPixels == CaptureClientPixels(handles[0][1]),
+          "custom data character input leaves stale overlapping glyph pixels");
+    Message(handles[0][1], WM_SETTEXT, 0, reinterpret_cast<LPARAM>(L"AT"));
+    Message(handles[15][1], WM_SETTEXT, 0, reinterpret_cast<LPARAM>(L"Z"));
+    Message(GetDlgItem(window, kTxHexId), BM_SETCHECK, BST_CHECKED, 0);
+    Message(window, WM_COMMAND, MAKEWPARAM(kTxHexId, BN_CLICKED),
+            reinterpret_cast<LPARAM>(GetDlgItem(window, kTxHexId)));
+    Check(Text(handles[0][1]) == L"41 54" && Text(handles[15][1]) == L"5A",
+          "HEX mode did not convert all custom data slots");
+    Message(handles[0][1], WM_SETTEXT, 0, reinterpret_cast<LPARAM>(L"4g1z5?4"));
+    Message(window, WM_COMMAND, MAKEWPARAM(extension::EditFirst, EN_CHANGE),
+            reinterpret_cast<LPARAM>(handles[0][1]));
+    Check(Text(handles[0][1]) == L"41 54",
+          "custom data did not enforce normalized HEX input");
+    Message(GetDlgItem(window, kTxHexId), BM_SETCHECK, BST_UNCHECKED, 0);
+    Message(window, WM_COMMAND, MAKEWPARAM(kTxHexId, BN_CLICKED),
+            reinterpret_cast<LPARAM>(GetDlgItem(window, kTxHexId)));
+    Check(Text(handles[0][1]) == L"AT" && Text(handles[15][1]) == L"Z",
+          "leaving HEX mode did not restore custom data text");
+    for (int i = 0; i < kMaximumStoredCustomSlots; ++i) {
+        const auto sentinel = L"槽位 " + std::to_wstring(i + 1) + L" / preserved data";
+        Message(handles[static_cast<std::size_t>(i)][1], WM_SETTEXT, 0,
+                reinterpret_cast<LPARAM>(sentinel.c_str()));
+    }
     Check(Text(GetDlgItem(window, extension::CustomTitle)) == L"自定义数据" &&
           Text(GetDlgItem(window, extension::ProtocolTitle)) == L"协议数据生成", "card titles mismatch");
     const auto titleFont = Message(GetDlgItem(window, 9004), WM_GETFONT);

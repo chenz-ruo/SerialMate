@@ -40,6 +40,9 @@ inline constexpr int kExtensionFullWidthLogical = 315;
 inline constexpr int kHorizontalCardGapLogical = 8;
 inline constexpr int kVerticalCardGapLogical = 8;
 inline constexpr int kTopButtonGapLogical = 12;
+inline constexpr int kStatusCardGapLogical = 4;
+inline constexpr int kStatusRowHeightLogical = 24;
+inline constexpr int kStatusBottomMarginLogical = 6;
 
 enum class WidthPhase { Base, Expanding, Expanded };
 
@@ -63,6 +66,8 @@ struct MainLayoutGeometry {
     RECT newButton{};
     RECT logButton{};
     RECT aboutButton{};
+    RECT statusLeft{};
+    RECT statusRight{};
     int currentVisibleContentRight = 0;
     bool extensionVisible = false;
     RECT extensionColumn{};
@@ -102,7 +107,6 @@ inline SettingsGeometry CalculateSettingsGeometry(int left, int top, int width,
     const double desiredScale = std::clamp(static_cast<double>(dpi) / 96.0, 1.0, 1.5);
     result.compact = clientHeight < static_cast<int>(900.0 * desiredScale);
 
-    const int baseCardGap = kVerticalCardGapLogical;
     const int baseTopPadding = result.compact ? 8 : 14;
     const int baseBottomPadding = result.compact ? 10 : 16;
     const int baseTitleHeight = result.compact ? 24 : 28;
@@ -121,15 +125,16 @@ inline SettingsGeometry CalculateSettingsGeometry(int left, int top, int width,
     const int sendBase = baseTopPadding + baseTitleHeight + baseTitleGap +
                          4 * baseControlHeight + 3 * baseSendRowGap + baseGroupGap +
                          baseTitleHeight + baseEncodingGap + baseComboHeight + baseBottomPadding;
-    const int totalBase = serialBase + receiveBase + sendBase + 2 * baseCardGap;
-    // The settings stack and the right-hand cards share the same bottom
-    // baseline. Leave the same 40px status-bar band and 20px client padding
-    // that MainLayoutGeometry uses, so the initial layout and every resize
-    // are calculated from the same available client area.
-    // Reserve the status-bar band plus a small physical safety margin so
-    // rounded compact dimensions never push the last control into the bar.
-    const int available = std::max(1, clientHeight - top - 60 - 8);
-    const double fitScale = static_cast<double>(available) / totalBase;
+    const auto dpiScale = [dpi](int value) {
+        return std::max(1, MulDiv(value, static_cast<int>(dpi ? dpi : 96), 96));
+    };
+    const int statusTop = clientHeight - dpiScale(kStatusBottomMarginLogical) -
+                          dpiScale(kStatusRowHeightLogical);
+    const int cardBottom = statusTop - dpiScale(kStatusCardGapLogical);
+    const int fixedCardGaps = 2 * dpiScale(kVerticalCardGapLogical);
+    const int available = std::max(1, cardBottom - top - fixedCardGaps);
+    const double fitScale = static_cast<double>(available) /
+                            (serialBase + receiveBase + sendBase);
     // Allow the compact stack to fit genuinely short client areas; the old
     // 0.85 floor could push the final card below the status-bar boundary.
     const double scale = std::clamp(std::min(desiredScale, fitScale), 0.75, 1.5);
@@ -219,12 +224,7 @@ inline SettingsGeometry CalculateSettingsGeometry(int left, int top, int width,
     result.encodingCombo = MakeRect(controlX, contentY, innerWidth, comboHeight);
     contentY += comboHeight;
     result.sendCard = MakeRect(left, y, width, contentY + bottomPadding - y);
-    // Keep the final card one physical pixel above the status-bar band. The
-    // scaled stack uses rounded dimensions, so without this clamp a 1px
-    // rounding carry can let the bottom border be clipped by the parent.
-    const int statusTop = clientHeight - MulDiv(40, static_cast<int>(dpi ? dpi : 96), 96);
-    result.sendCard.bottom = static_cast<LONG>(std::min(static_cast<int>(result.sendCard.bottom),
-                                                       statusTop - 1));
+    result.sendCard.bottom = static_cast<LONG>(cardBottom);
     return result;
 }
 
@@ -285,6 +285,10 @@ inline MainLayoutGeometry CalculateMainLayoutGeometry(int clientWidth, int clien
     result.dataSendCard = RECT{result.rightX, result.settings.sendCard.top,
                                result.rightX + result.rightWidth,
                                result.contentBottom};
+    const int statusTop = result.contentBottom + scale(kStatusCardGapLogical);
+    const int statusBottom = statusTop + scale(kStatusRowHeightLogical);
+    result.statusLeft = RECT{pad, statusTop, clientWidth / 2, statusBottom};
+    result.statusRight = RECT{clientWidth / 2, statusTop, clientWidth - pad, statusBottom};
     result.openButton = MakeRect(result.settings.serialCard.left, top, 0, 52);
     result.closeButton = result.openButton;
     const int titleTopPadding = result.settings.serialTitle.top - result.settings.serialCard.top;
@@ -349,8 +353,8 @@ inline MainLayoutGeometry CalculateMainLayoutGeometry(int clientWidth, int clien
     result.protocolTitle = title(result.protocolCard);
     const int rowsTop = result.customDataTitle.bottom + titleGap;
     const int rowsBottom = result.customDataCard.bottom - innerPadding;
-    const int rowHeight = scale(32);
-    const int rowGap = scale(6);
+    const int rowHeight = result.settings.interval.bottom - result.settings.interval.top;
+    const int rowGap = scale(4);
     result.visibleCustomRows = std::clamp((rowsBottom - rowsTop + rowGap) / (rowHeight + rowGap),
                                          0, kMaximumStoredCustomSlots);
     for (int i = 0; i < result.visibleCustomRows; ++i) {
