@@ -50,27 +50,8 @@ if (Test-Path -LiteralPath $buildFull) {
 
 cmake -S $projectRoot -B $buildDirectory -A x64
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-$targets = @(
-    "SerialMate",
-    "SerialMateTests",
-    "UpdateCheckerTests",
-    "UpdateInstallerTests",
-    "CommRecordTests",
-    "CommViewTests",
-    "TextCodecStreamTests",
-    "SerialPortInfoTests",
-    "LogWriterTests",
-    "RxIngressQueueTests",
-    "SerialPortShutdownTests",
-    "VersionConsistencyTests",
-    "UiGeometryTests",
-    "UiSmokeTests",
-    "SerialLoopbackTests"
-)
-foreach ($target in $targets) {
-    cmake --build $buildDirectory --config Release --target $target --parallel
-    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-}
+cmake --build $buildDirectory --config Release --parallel
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 ctest --test-dir $buildDirectory -C Release --output-on-failure
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
