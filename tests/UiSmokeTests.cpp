@@ -857,10 +857,9 @@ int wmain(int argc, wchar_t** argv) {
     const auto systemExportBytes = ReadFileBytes(exportPath);
     const std::string systemExportText(systemExportBytes.begin(), systemExportBytes.end());
     if (!IsValidUtf8(systemExportBytes) || systemExportText.find("UI-SMOKE") == std::string::npos ||
-        systemExportText.find(u8"已连接 ") != std::string::npos ||
-        systemExportText.find(u8"串口已关闭") != std::string::npos ||
-        systemExportText.find("NOTICE") != std::string::npos || systemExportText.find("ERROR") != std::string::npos) {
-        std::wcerr << L"Export is invalid UTF-8, missing traffic, or includes hidden system messages\n";
+        systemExportText.find(u8"已连接 ") == std::string::npos ||
+        systemExportText.find(u8"串口已关闭") != std::string::npos) {
+        std::wcerr << L"Export is invalid UTF-8 or does not match visible system records\n";
         PostMessageW(main, WM_CLOSE, 0, 0); cleanup(); return 47;
     }
     std::wcout << L"PASS: communication record export\n";

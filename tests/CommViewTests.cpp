@@ -198,6 +198,10 @@ void CheckRecordView() {
     Check(view.Copy(comm::CopyFormat::Full, false).find(L"00 09 0A 0D") != std::wstring::npos, L"copy-full-all");
     Check(view.Copy(comm::CopyFormat::Hex, false).find(L"00 09 0A 0D") != std::wstring::npos, L"copy-hex-all");
     Check(view.Copy(comm::CopyFormat::Text, false).find(L"..... !~...") != std::wstring::npos, L"copy-text-all");
+    view.SetReceiveOnly(true);
+    Check(view.Copy(comm::CopyFormat::Full, false).find(L"→TX") == std::wstring::npos,
+          L"copy-full-receive-only");
+    view.SetReceiveOnly(false);
 
     const std::size_t unchangedRows = buffer.RowCount(view.BytesPerRow());
     view.ScrollTo(0);

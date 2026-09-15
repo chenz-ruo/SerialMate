@@ -66,8 +66,8 @@ std::wstring DisplayTextRange(const std::vector<std::uint8_t>& bytes,
                               std::size_t offset, std::size_t count,
                               textcodec::TextEncoding encoding = textcodec::TextEncoding::Utf8);
 
-// Formats one event without depending on the screen view. Full uses a stable
-// 16-byte export layout; Hex/Text are one payload line from the raw bytes.
+// Formats one event without depending on the screen view. Full uses the
+// supplied bytes-per-row layout; Hex/Text are one payload line from the raw bytes.
 std::wstring FormatRecord(const Record& record,
                           CopyFormat format = CopyFormat::Full,
                           bool timestamps = true,

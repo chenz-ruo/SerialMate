@@ -1409,7 +1409,7 @@ void Application::ExportLog() {
 }
 
 bool Application::ExportLogPath(const std::wstring& path) {
-    const std::wstring content = records_.Copy(comm::CopyFormat::Full, std::nullopt, Checked(ID_TIMESTAMP), encoding_);
+    const std::wstring content = recordView_.Copy(comm::CopyFormat::Full, false);
     const auto bytes = util::Utf8Bytes(content);
     std::ofstream stream(std::filesystem::path(path), std::ios::binary | std::ios::trunc);
     if (!stream) return false;

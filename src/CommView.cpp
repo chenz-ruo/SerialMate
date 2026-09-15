@@ -284,6 +284,7 @@ std::wstring RecordView::Copy(CopyFormat format, bool selected) const {
     for (const auto& record : Active().Records()) {
         if (range && (record.id < std::min(range->first, range->second) ||
                       record.id > std::max(range->first, range->second))) continue;
+        if (receiveOnly_ && record.kind == RecordKind::Data && record.direction == Direction::Tx) continue;
         Record displayed = record;
         displayed.timestamp = DisplayTimestamp(record.timestamp);
         auto text = FormatRecord(displayed, format, timestamps_, encoding_, bytesPerRow_);
