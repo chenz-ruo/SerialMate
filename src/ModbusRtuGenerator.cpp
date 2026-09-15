@@ -12,6 +12,8 @@ bool IsHex(wchar_t value) {
            (value >= L'A' && value <= L'F');
 }
 
+bool IsDecimal(wchar_t value) { return value >= L'0' && value <= L'9'; }
+
 unsigned HexValue(wchar_t value) {
     if (value >= L'0' && value <= L'9') return static_cast<unsigned>(value - L'0');
     return static_cast<unsigned>(std::towupper(value) - L'A' + 10);
@@ -23,6 +25,31 @@ std::wstring Trim(const std::wstring& text) {
     std::size_t last = text.size();
     while (last > first && std::iswspace(text[last - 1])) --last;
     return text.substr(first, last - first);
+}
+
+std::optional<std::uint8_t> ParseSlave(const std::wstring& input, std::wstring& error) {
+    const std::wstring text = Trim(input);
+    if (text.empty()) {
+        error = L"从机地址不能为空";
+        return std::nullopt;
+    }
+    if (text.size() > 3) {
+        error = L"从机地址必须是十进制1-247";
+        return std::nullopt;
+    }
+    std::uint32_t value = 0;
+    for (wchar_t character : text) {
+        if (!IsDecimal(character)) {
+            error = L"从机地址必须是十进制数字";
+            return std::nullopt;
+        }
+        value = value * 10 + static_cast<std::uint32_t>(character - L'0');
+    }
+    if (value < 1 || value > 247) {
+        error = L"从机地址范围必须是1-247";
+        return std::nullopt;
+    }
+    return static_cast<std::uint8_t>(value);
 }
 
 std::optional<std::uint16_t> ParseScalar(const std::wstring& input, std::size_t maxDigits,
@@ -83,6 +110,29 @@ std::optional<std::vector<std::uint16_t>> ParseWords(const std::wstring& input,
     return words;
 }
 
+std::optional<std::vector<std::uint8_t>> ParseBits(const std::wstring& input,
+                                                   std::uint16_t quantity,
+                                                   std::wstring& error) {
+    std::wstring bits;
+    bits.reserve(input.size());
+    for (wchar_t character : input) {
+        if (std::iswspace(character)) continue;
+        if (character != L'0' && character != L'1') {
+            error = L"线圈数据只能包含0和1";
+            return std::nullopt;
+        }
+        bits.push_back(character);
+    }
+    if (bits.size() != quantity) {
+        error = L"线圈数据位数必须与线圈数量一致";
+        return std::nullopt;
+    }
+    std::vector<std::uint8_t> packed((quantity + 7) / 8, 0);
+    for (std::size_t index = 0; index < bits.size(); ++index)
+        if (bits[index] == L'1') packed[index / 8] |= static_cast<std::uint8_t>(1u << (index % 8));
+    return packed;
+}
+
 std::wstring FormatHex(const std::vector<std::uint8_t>& frame) {
     constexpr wchar_t digits[] = L"0123456789ABCDEF";
     std::wstring text;
@@ -118,9 +168,8 @@ std::uint16_t CalculateCrc(const std::vector<std::uint8_t>& bytes) {
 
 Result Generate(const Request& request) {
     std::wstring error;
-    const auto slave = ParseScalar(request.slave, 2, L"从机地址", error);
+    const auto slave = ParseSlave(request.slave, error);
     if (!slave) return Failure(std::move(error));
-    if (*slave < 0x01 || *slave > 0xF7) return Failure(L"从机地址范围必须是01-F7");
 
     const auto address = ParseScalar(request.address, 4, L"寄存器地址", error);
     if (!address) return Failure(std::move(error));
@@ -130,13 +179,34 @@ Result Generate(const Request& request) {
     PushWord(frame, *address);
 
     switch (request.function) {
+    case Function::ReadCoils:
+    case Function::ReadDiscreteInputs: {
+        const auto quantity = ParseScalar(request.quantity, 4, L"线圈数量", error);
+        if (!quantity) return Failure(std::move(error));
+        if (*quantity < 1 || *quantity > 2000)
+            return Failure(L"读取线圈数量范围必须是0001-07D0");
+        if (static_cast<std::uint32_t>(*address) + *quantity - 1 > 0xFFFF)
+            return Failure(L"起始地址与数量超出地址范围");
+        PushWord(frame, *quantity);
+        break;
+    }
     case Function::ReadHoldingRegisters:
     case Function::ReadInputRegisters: {
         const auto quantity = ParseScalar(request.quantity, 4, L"寄存器数量", error);
         if (!quantity) return Failure(std::move(error));
         if (*quantity < 1 || *quantity > 125)
             return Failure(L"读取寄存器数量范围必须是0001-007D");
+        if (static_cast<std::uint32_t>(*address) + *quantity - 1 > 0xFFFF)
+            return Failure(L"起始地址与数量超出地址范围");
         PushWord(frame, *quantity);
+        break;
+    }
+    case Function::WriteSingleCoil: {
+        const auto value = ParseScalar(request.value, 4, L"线圈值", error);
+        if (!value) return Failure(std::move(error));
+        if (*value != 0xFF00 && *value != 0x0000)
+            return Failure(L"单线圈值只能是FF00(ON)或0000(OFF)");
+        PushWord(frame, *value);
         break;
     }
     case Function::WriteSingleRegister: {
@@ -145,11 +215,27 @@ Result Generate(const Request& request) {
         PushWord(frame, *value);
         break;
     }
+    case Function::WriteMultipleCoils: {
+        const auto quantity = ParseScalar(request.quantity, 4, L"线圈数量", error);
+        if (!quantity) return Failure(std::move(error));
+        if (*quantity < 1 || *quantity > 1968)
+            return Failure(L"写入线圈数量范围必须是0001-07B0");
+        if (static_cast<std::uint32_t>(*address) + *quantity - 1 > 0xFFFF)
+            return Failure(L"起始地址与数量超出地址范围");
+        const auto bits = ParseBits(request.data, *quantity, error);
+        if (!bits) return Failure(std::move(error));
+        PushWord(frame, *quantity);
+        frame.push_back(static_cast<std::uint8_t>(bits->size()));
+        frame.insert(frame.end(), bits->begin(), bits->end());
+        break;
+    }
     case Function::WriteMultipleRegisters: {
         const auto quantity = ParseScalar(request.quantity, 4, L"寄存器数量", error);
         if (!quantity) return Failure(std::move(error));
         if (*quantity < 1 || *quantity > 123)
             return Failure(L"写入寄存器数量范围必须是0001-007B");
+        if (static_cast<std::uint32_t>(*address) + *quantity - 1 > 0xFFFF)
+            return Failure(L"起始地址与数量超出地址范围");
         const auto words = ParseWords(request.data, error);
         if (!words) return Failure(std::move(error));
         if (words->size() != *quantity)

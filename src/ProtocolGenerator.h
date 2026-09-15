@@ -9,16 +9,22 @@ namespace protocol {
 enum class Type { ModbusRtu };
 
 enum class Function : std::uint8_t {
+    ReadCoils = 0x01,
+    ReadDiscreteInputs = 0x02,
     ReadHoldingRegisters = 0x03,
     ReadInputRegisters = 0x04,
+    WriteSingleCoil = 0x05,
     WriteSingleRegister = 0x06,
+    WriteMultipleCoils = 0x0F,
     WriteMultipleRegisters = 0x10,
 };
 
 struct Request {
     Type type = Type::ModbusRtu;
     Function function = Function::ReadHoldingRegisters;
-    std::wstring slave = L"01";
+    // Modbus slave addresses are entered in decimal (1-247). Other numeric
+    // fields remain hexadecimal engineering values.
+    std::wstring slave = L"1";
     std::wstring address;
     std::wstring quantity;
     std::wstring value;

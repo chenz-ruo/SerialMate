@@ -28,5 +28,6 @@ inline constexpr int ResultLabel = 714;
 inline constexpr int ResultEdit = 715;
 inline constexpr int Copy = 716;
 inline constexpr int Status = 717;
+inline constexpr int CoilValueCombo = 718;
 inline constexpr int FillSlotFirst = 720;
 }

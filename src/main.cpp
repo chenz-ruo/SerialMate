@@ -559,20 +559,23 @@ void Application::Create() {
     auto protocolType = Combo(protocolui::TypeCombo);
     AddComboItems(protocolType, {L"Modbus RTU"}, 0);
     Label(L"从机地址", protocolui::SlaveLabel);
-    auto slave = Make(L"EDIT", L"01", ES_MULTILINE | ES_AUTOHSCROLL | WS_TABSTOP,
+    auto slave = Make(L"EDIT", L"1", ES_NUMBER | ES_MULTILINE | ES_AUTOHSCROLL | WS_TABSTOP,
                       0, protocolui::SlaveEdit);
     SetWindowSubclass(slave, IntervalEditSubclass, 1, 0);
     CenterSingleLineEditText(slave);
     Label(L"功能码", protocolui::FunctionLabel);
     auto function = Combo(protocolui::FunctionCombo);
-    AddComboItems(function, {L"03 读保持寄存器", L"04 读输入寄存器",
-                             L"06 写单个寄存器", L"10 写多个寄存器"}, 0);
+    AddComboItems(function, {L"01 读线圈", L"02 读离散输入", L"03 读保持寄存器",
+                             L"04 读输入寄存器", L"05 写单线圈", L"06 写单个寄存器",
+                             L"0F 写多个线圈", L"10 写多个寄存器"}, 2);
     Label(L"起始地址", protocolui::AddressLabel);
     auto address = Make(L"EDIT", L"0000", ES_MULTILINE | ES_AUTOHSCROLL | WS_TABSTOP,
                         0, protocolui::AddressEdit);
     Label(L"寄存器数量", protocolui::QuantityLabel);
     auto quantity = Make(L"EDIT", L"0001", ES_MULTILINE | ES_AUTOHSCROLL | WS_TABSTOP,
                          0, protocolui::QuantityEdit);
+    auto coilValue = Combo(protocolui::CoilValueCombo);
+    AddComboItems(coilValue, {L"ON (FF00)", L"OFF (0000)"}, 0);
     Label(L"写入数据", protocolui::DataLabel);
     auto data = Make(L"EDIT", L"0000", ES_MULTILINE | ES_AUTOHSCROLL | WS_TABSTOP,
                      0, protocolui::DataEdit);
@@ -581,7 +584,7 @@ void Application::Create() {
         CenterSingleLineEditText(edit);
         SendMessageW(edit, EM_SETLIMITTEXT, 1024, 0);
     }
-    SendMessageW(slave, EM_SETLIMITTEXT, 2, 0);
+    SendMessageW(slave, EM_SETLIMITTEXT, 3, 0);
     Button(L"生成", protocolui::Generate, true);
     Button(L"填入自定义...", protocolui::FillCustom);
     auto resultLabel = Label(L"生成结果", protocolui::ResultLabel);
@@ -623,27 +626,39 @@ void Application::Create() {
 
 protocol::Function Application::SelectedProtocolFunction() const {
     switch (ComboSelection(protocolui::FunctionCombo)) {
-    case 1: return protocol::Function::ReadInputRegisters;
-    case 2: return protocol::Function::WriteSingleRegister;
-    case 3: return protocol::Function::WriteMultipleRegisters;
+    case 0: return protocol::Function::ReadCoils;
+    case 1: return protocol::Function::ReadDiscreteInputs;
+    case 2: return protocol::Function::ReadHoldingRegisters;
+    case 3: return protocol::Function::ReadInputRegisters;
+    case 4: return protocol::Function::WriteSingleCoil;
+    case 5: return protocol::Function::WriteSingleRegister;
+    case 6: return protocol::Function::WriteMultipleCoils;
+    case 7: return protocol::Function::WriteMultipleRegisters;
     default: return protocol::Function::ReadHoldingRegisters;
     }
 }
 
 void Application::SetProtocolControlsVisible(bool visible) {
+    const auto function = SelectedProtocolFunction();
     const bool showData = visible &&
-                          SelectedProtocolFunction() == protocol::Function::WriteMultipleRegisters;
-    const std::array<int, 17> ids{
+                          (function == protocol::Function::WriteMultipleCoils ||
+                           function == protocol::Function::WriteMultipleRegisters);
+    const bool showCoil = visible && function == protocol::Function::WriteSingleCoil;
+    const std::array<int, 18> ids{
         protocolui::TypeLabel, protocolui::TypeCombo, protocolui::SlaveLabel,
         protocolui::SlaveEdit, protocolui::FunctionLabel, protocolui::FunctionCombo,
         protocolui::AddressLabel, protocolui::AddressEdit, protocolui::QuantityLabel,
-        protocolui::QuantityEdit, protocolui::DataLabel, protocolui::DataEdit,
+        protocolui::QuantityEdit, protocolui::CoilValueCombo, protocolui::DataLabel,
+        protocolui::DataEdit,
         protocolui::Generate, protocolui::FillCustom, protocolui::ResultLabel,
         protocolui::ResultEdit, protocolui::Copy};
     for (int id : ids) {
         HWND control = Get(id);
         const bool dataControl = id == protocolui::DataLabel || id == protocolui::DataEdit;
-        const bool show = visible && (!dataControl || showData);
+        const bool coilControl = id == protocolui::CoilValueCombo;
+        const bool quantityControl = id == protocolui::QuantityEdit;
+        const bool show = visible && (!dataControl || showData) &&
+                          (!coilControl || showCoil) && (!quantityControl || !showCoil);
         if (!show && GetFocus() == control) SetFocus(Get(ID_SEND_EDIT));
         ShowWindow(control, show ? SW_SHOWNA : SW_HIDE);
     }
@@ -667,8 +682,9 @@ void Application::LayoutProtocolControls() {
     const int availableHeight = std::max(1, static_cast<int>(card.bottom) - layout_.cardPadding - y);
     const int desiredHeight = static_cast<int>(layout_.settings.interval.bottom -
                                                layout_.settings.interval.top);
-    const bool showData = SelectedProtocolFunction() ==
-                          protocol::Function::WriteMultipleRegisters;
+    const auto function = SelectedProtocolFunction();
+    const bool showData = function == protocol::Function::WriteMultipleCoils ||
+                          function == protocol::Function::WriteMultipleRegisters;
 
     // All protocol input fields use one shared horizontal anchor.  Keeping
     // this coordinate authoritative prevents the slave field from drifting
@@ -705,6 +721,8 @@ void Application::LayoutProtocolControls() {
     const int quantityLabelX = left + addressLabelWidth + addressEditWidth + columnGap;
     move(protocolui::QuantityLabel, quantityLabelX, y, quantityLabelWidth, secondaryHeight);
     move(protocolui::QuantityEdit, quantityLabelX + quantityLabelWidth, y,
+         right - quantityLabelX - quantityLabelWidth, secondaryHeight);
+    move(protocolui::CoilValueCombo, quantityLabelX + quantityLabelWidth, y,
          right - quantityLabelX - quantityLabelWidth, secondaryHeight);
     y += secondaryHeight + rowGap;
 
@@ -744,10 +762,19 @@ void Application::UpdateProtocolForm() {
     }
 
     const auto function = SelectedProtocolFunction();
+    const bool coilAddress = function == protocol::Function::ReadCoils ||
+                             function == protocol::Function::ReadDiscreteInputs ||
+                             function == protocol::Function::WriteSingleCoil ||
+                             function == protocol::Function::WriteMultipleCoils;
     SetWindowTextW(Get(protocolui::AddressLabel),
-                   function == protocol::Function::WriteSingleRegister ? L"寄存器地址" : L"起始地址");
+                   function == protocol::Function::WriteSingleRegister ? L"寄存器地址" :
+                   function == protocol::Function::WriteSingleCoil ? L"线圈地址" : L"起始地址");
     SetWindowTextW(Get(protocolui::QuantityLabel),
-                   function == protocol::Function::WriteSingleRegister ? L"写入值" : L"寄存器数量");
+                   function == protocol::Function::WriteSingleRegister ? L"写入值" :
+                   function == protocol::Function::WriteSingleCoil ? L"线圈状态" :
+                   coilAddress ? L"线圈数量" : L"寄存器数量");
+    SetWindowTextW(Get(protocolui::DataLabel),
+                   function == protocol::Function::WriteMultipleCoils ? L"线圈数据" : L"写入数据");
     LayoutProtocolControls();
     SetProtocolControlsVisible(layout_.extensionVisible);
     if (focused && IsWindowVisible(focused)) SetFocus(focused);
@@ -772,11 +799,15 @@ void Application::GenerateProtocolFrame() {
     request.function = SelectedProtocolFunction();
     request.slave = WindowText(Get(protocolui::SlaveEdit));
     request.address = WindowText(Get(protocolui::AddressEdit));
-    if (request.function == protocol::Function::WriteSingleRegister)
+    if (request.function == protocol::Function::WriteSingleCoil) {
+        request.value = ComboSelection(protocolui::CoilValueCombo) == 0 ? L"FF00" : L"0000";
+    } else if (request.function == protocol::Function::WriteSingleRegister) {
         request.value = WindowText(Get(protocolui::QuantityEdit));
-    else
+    } else {
         request.quantity = WindowText(Get(protocolui::QuantityEdit));
-    if (request.function == protocol::Function::WriteMultipleRegisters)
+    }
+    if (request.function == protocol::Function::WriteMultipleCoils ||
+        request.function == protocol::Function::WriteMultipleRegisters)
         request.data = WindowText(Get(protocolui::DataEdit));
 
     auto generated = protocol::Generate(request);

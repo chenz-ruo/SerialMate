@@ -205,7 +205,8 @@ void CheckForm(HWND window) {
         protocolui::TypeLabel, protocolui::TypeCombo, protocolui::SlaveLabel,
         protocolui::SlaveEdit, protocolui::FunctionLabel, protocolui::FunctionCombo,
         protocolui::AddressLabel, protocolui::AddressEdit, protocolui::QuantityLabel,
-        protocolui::QuantityEdit, protocolui::DataLabel, protocolui::DataEdit,
+        protocolui::QuantityEdit, protocolui::CoilValueCombo, protocolui::DataLabel,
+        protocolui::DataEdit,
         protocolui::Generate, protocolui::FillCustom, protocolui::ResultLabel,
         protocolui::ResultEdit, protocolui::Copy};
     Check(GetDlgItem(window, protocolui::Status) == nullptr,
@@ -221,7 +222,8 @@ void CheckForm(HWND window) {
                                                        static_cast<int>(Message(window, kQuery, 51)));
     Check(geometry.extensionVisible, "full extension did not become visible");
     for (int id : ids) {
-        if (id == protocolui::DataLabel || id == protocolui::DataEdit) continue;
+        if (id == protocolui::DataLabel || id == protocolui::DataEdit ||
+            id == protocolui::CoilValueCombo) continue;
         CheckVisible(window, id, true, "protocol control hidden in full extension mode");
         const RECT actual = ChildRect(window, GetDlgItem(window, id));
         if (!Contains(geometry.protocolCard, actual))
@@ -235,8 +237,11 @@ void CheckForm(HWND window) {
     HWND type = GetDlgItem(window, protocolui::TypeCombo);
     Check(Message(type, CB_GETCOUNT) == 1 && Text(type) == L"Modbus RTU",
           "protocol combo is not fixed to Modbus RTU");
-    Check(Text(GetDlgItem(window, protocolui::SlaveEdit)) == L"01",
-          "default slave address is not 01");
+    HWND function = GetDlgItem(window, protocolui::FunctionCombo);
+    Check(Message(function, CB_GETCOUNT) == 8,
+          "Modbus function combo does not contain all supported functions");
+    Check(Text(GetDlgItem(window, protocolui::SlaveEdit)) == L"1",
+          "default slave address is not decimal 1");
     Check((GetWindowLongPtrW(GetDlgItem(window, protocolui::ResultEdit), GWL_STYLE) & ES_READONLY) != 0,
           "protocol result edit is not read-only");
     const auto CheckRowAligned = [&](int first, int second, const char* message) {
@@ -256,21 +261,37 @@ void CheckForm(HWND window) {
               ChildRect(window, GetDlgItem(window, protocolui::AddressEdit)).left,
           "slave and address edits do not share the same left edge");
 
-    for (int index : {0, 1}) {
+    for (int index : {0, 1, 2, 3}) {
         SelectFunction(window, index);
         Check(Text(GetDlgItem(window, protocolui::AddressLabel)) == L"起始地址" &&
-                  Text(GetDlgItem(window, protocolui::QuantityLabel)) == L"寄存器数量",
-              "03/04 parameter labels are incorrect");
+                  Text(GetDlgItem(window, protocolui::QuantityLabel)) ==
+                      (index < 2 ? L"线圈数量" : L"寄存器数量"),
+              "read parameter labels are incorrect");
         CheckVisible(window, protocolui::DataEdit, false, "03/04 write data is visible");
+        CheckVisible(window, protocolui::CoilValueCombo, false, "read coil value is visible");
     }
 
-    SelectFunction(window, 2);
+    SelectFunction(window, 4);
+    Check(Text(GetDlgItem(window, protocolui::AddressLabel)) == L"线圈地址" &&
+              Text(GetDlgItem(window, protocolui::QuantityLabel)) == L"线圈状态",
+          "05 parameter labels are incorrect");
+    CheckVisible(window, protocolui::QuantityEdit, false, "05 quantity edit is visible");
+    CheckVisible(window, protocolui::CoilValueCombo, true, "05 coil value combo is hidden");
+
+    SelectFunction(window, 5);
     Check(Text(GetDlgItem(window, protocolui::AddressLabel)) == L"寄存器地址" &&
               Text(GetDlgItem(window, protocolui::QuantityLabel)) == L"写入值",
           "06 parameter labels are incorrect");
     CheckVisible(window, protocolui::DataEdit, false, "06 write data is visible");
+    CheckVisible(window, protocolui::CoilValueCombo, false, "06 coil value is visible");
 
-    SelectFunction(window, 3);
+    SelectFunction(window, 6);
+    Check(Text(GetDlgItem(window, protocolui::AddressLabel)) == L"起始地址" &&
+              Text(GetDlgItem(window, protocolui::QuantityLabel)) == L"线圈数量",
+          "0F parameter labels are incorrect");
+    CheckVisible(window, protocolui::DataEdit, true, "0F write data edit is hidden");
+
+    SelectFunction(window, 7);
     Check(Text(GetDlgItem(window, protocolui::AddressLabel)) == L"起始地址" &&
               Text(GetDlgItem(window, protocolui::QuantityLabel)) == L"寄存器数量",
           "10 parameter labels are incorrect");
@@ -295,8 +316,8 @@ void CheckInteractions(HWND window) {
     Check(Text(GetDlgItem(window, extension::EditFirst)) == L"SLOT-1",
           "fill without a result changed custom data");
 
-    SelectFunction(window, 0);
-    SetText(window, protocolui::SlaveEdit, L"01");
+    SelectFunction(window, 2);
+    SetText(window, protocolui::SlaveEdit, L"1");
     SetText(window, protocolui::AddressEdit, L"0000");
     SetText(window, protocolui::QuantityEdit, L"0002");
     Click(window, protocolui::Generate);
@@ -312,7 +333,7 @@ void CheckInteractions(HWND window) {
     const auto geometry = CalculateMainLayoutGeometry(client.right, client.bottom,
                                                        GetDpiForWindow(window),
                                                        static_cast<int>(Message(window, kQuery, 51)));
-    SelectFunction(window, 3);
+    SelectFunction(window, 7);
     GdiFlush();
     const auto switchedPixels = CapturePixels(window, geometry.protocolCard);
     Check(RedrawWindow(window, &geometry.protocolCard, nullptr,
@@ -321,7 +342,7 @@ void CheckInteractions(HWND window) {
     GdiFlush();
     Check(switchedPixels == CapturePixels(window, geometry.protocolCard),
           "function switch leaves stale pixels in protocol Card");
-    SelectFunction(window, 0);
+    SelectFunction(window, 2);
 
     PutClipboard(L"OLD");
     Check(Message(GetDlgItem(window, kTxHexId), BM_GETCHECK) == BST_UNCHECKED,
@@ -367,7 +388,7 @@ void CheckInteractions(HWND window) {
     Check(Message(window, kQuery, 2) == txBefore,
           "filling custom slot 16 transmitted serial data");
 
-    SetText(window, protocolui::SlaveEdit, L"00");
+    SetText(window, protocolui::SlaveEdit, L"0");
     Click(window, protocolui::Generate);
     Check(Text(GetDlgItem(window, protocolui::ResultEdit)) == expected,
           "invalid generation cleared the previous valid result");
