@@ -670,8 +670,12 @@ void Application::LayoutProtocolControls() {
     const bool showData = SelectedProtocolFunction() ==
                           protocol::Function::WriteMultipleRegisters;
 
-    const int typeLabelWidth = scale(66);
-    move(protocolui::TypeCombo, left + typeLabelWidth, y, width - typeLabelWidth, desiredHeight);
+    // All protocol input fields use one shared horizontal anchor.  Keeping
+    // this coordinate authoritative prevents the slave field from drifting
+    // away from the address/data fields when DPI rounding is applied.
+    const int fieldLabelWidth = scale(66);
+    const int fieldLeft = left + fieldLabelWidth;
+    move(protocolui::TypeCombo, fieldLeft, y, width - fieldLabelWidth, desiredHeight);
     RECT comboRect{};
     GetWindowRect(Get(protocolui::TypeCombo), &comboRect);
     const int comboRowHeight = std::max(1, static_cast<int>(comboRect.bottom - comboRect.top));
@@ -679,26 +683,25 @@ void Application::LayoutProtocolControls() {
     const int totalRows = 2 + secondaryRows;
     const int secondaryHeight = std::max(1, std::min(desiredHeight,
         (availableHeight - 2 * comboRowHeight - (totalRows - 1) * rowGap) / secondaryRows));
-    move(protocolui::TypeLabel, left, y, typeLabelWidth, comboRowHeight);
-    move(protocolui::TypeCombo, left + typeLabelWidth, y, width - typeLabelWidth, comboRowHeight);
+    move(protocolui::TypeLabel, left, y, fieldLabelWidth, comboRowHeight);
+    move(protocolui::TypeCombo, fieldLeft, y, width - fieldLabelWidth, comboRowHeight);
     y += comboRowHeight + rowGap;
 
-    const int slaveLabelWidth = typeLabelWidth;
     const int slaveEditWidth = scale(44);
     const int functionLabelWidth = scale(54);
-    move(protocolui::SlaveLabel, left, y, slaveLabelWidth, comboRowHeight);
-    move(protocolui::SlaveEdit, left + slaveLabelWidth, y, slaveEditWidth, comboRowHeight);
-    const int functionLabelX = left + slaveLabelWidth + slaveEditWidth + columnGap;
+    move(protocolui::SlaveLabel, left, y, fieldLabelWidth, comboRowHeight);
+    move(protocolui::SlaveEdit, fieldLeft, y, slaveEditWidth, comboRowHeight);
+    const int functionLabelX = fieldLeft + slaveEditWidth + columnGap;
     move(protocolui::FunctionLabel, functionLabelX, y, functionLabelWidth, comboRowHeight);
     move(protocolui::FunctionCombo, functionLabelX + functionLabelWidth, y,
          right - functionLabelX - functionLabelWidth, comboRowHeight);
     y += comboRowHeight + rowGap;
 
-    const int addressLabelWidth = scale(66);
+    const int addressLabelWidth = fieldLabelWidth;
     const int addressEditWidth = scale(58);
     const int quantityLabelWidth = scale(76);
     move(protocolui::AddressLabel, left, y, addressLabelWidth, secondaryHeight);
-    move(protocolui::AddressEdit, left + addressLabelWidth, y, addressEditWidth, secondaryHeight);
+    move(protocolui::AddressEdit, fieldLeft, y, addressEditWidth, secondaryHeight);
     const int quantityLabelX = left + addressLabelWidth + addressEditWidth + columnGap;
     move(protocolui::QuantityLabel, quantityLabelX, y, quantityLabelWidth, secondaryHeight);
     move(protocolui::QuantityEdit, quantityLabelX + quantityLabelWidth, y,
@@ -707,7 +710,7 @@ void Application::LayoutProtocolControls() {
 
     if (showData) {
         move(protocolui::DataLabel, left, y, addressLabelWidth, secondaryHeight);
-        move(protocolui::DataEdit, left + addressLabelWidth, y, width - addressLabelWidth,
+        move(protocolui::DataEdit, fieldLeft, y, width - addressLabelWidth,
              secondaryHeight);
         y += secondaryHeight + rowGap;
     }
@@ -729,6 +732,17 @@ void Application::LayoutProtocolControls() {
 }
 
 void Application::UpdateProtocolForm() {
+    // Moving the 10-function-code data row changes the vertical positions of
+    // the result controls.  Hide the old children and erase the card first;
+    // otherwise a transparent STATIC control can leave its previous caption
+    // painted behind the newly laid-out controls.
+    const HWND focused = GetFocus();
+    SetProtocolControlsVisible(false);
+    if (!IsRectEmpty(&layout_.protocolCard)) {
+        RedrawWindow(window_, &layout_.protocolCard, nullptr,
+                     RDW_INVALIDATE | RDW_ERASE | RDW_UPDATENOW | RDW_ALLCHILDREN);
+    }
+
     const auto function = SelectedProtocolFunction();
     SetWindowTextW(Get(protocolui::AddressLabel),
                    function == protocol::Function::WriteSingleRegister ? L"寄存器地址" : L"起始地址");
@@ -736,6 +750,7 @@ void Application::UpdateProtocolForm() {
                    function == protocol::Function::WriteSingleRegister ? L"写入值" : L"寄存器数量");
     LayoutProtocolControls();
     SetProtocolControlsVisible(layout_.extensionVisible);
+    if (focused && IsWindowVisible(focused)) SetFocus(focused);
     if (!IsRectEmpty(&layout_.protocolCard)) {
         RedrawWindow(window_, &layout_.protocolCard, nullptr,
                      RDW_INVALIDATE | RDW_ERASE | RDW_UPDATENOW | RDW_ALLCHILDREN);
