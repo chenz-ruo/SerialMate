@@ -18,6 +18,7 @@ constexpr int kIntervalEditId = 121;
 constexpr int kTxHexId = 117;
 constexpr int kStatusLeftId = 132;
 constexpr int kStatusRightId = 133;
+constexpr WPARAM kRecordRefreshTimerActiveQuery = 66;
 int checks = 0;
 
 void Check(bool condition, const char* message) {
@@ -278,12 +279,13 @@ void CheckWindow(HWND window, const MainLayoutGeometry& geometry, bool report) {
 }
 
 void Run(HWND window) {
+    const auto query = [&](WPARAM key) { return Message(window, kQuery, key); };
     RECT startupClient{}, startupWindow{};
     GetClientRect(window, &startupClient); GetWindowRect(window, &startupWindow);
-    const int defaultWidth = static_cast<int>(Message(window, kQuery, 50));
-    const int fullWidth = static_cast<int>(Message(window, kQuery, 42));
-    Check(startupClient.right == defaultWidth && Message(window, kQuery, 43) == 0 &&
-          Message(window, kQuery, 9) == 8, "initial shown window must start in Phase A with eight bytes");
+    const int defaultWidth = static_cast<int>(query(50));
+    const int fullWidth = static_cast<int>(query(42));
+    Check(startupClient.right == defaultWidth && query(43) == 0 && query(9) == 8,
+          "initial shown window must start in Phase A with eight bytes");
     std::cout << "DefaultWindowWidth=" << startupWindow.right - startupWindow.left << '\n';
     std::cout << "DPI=" << Message(window, kQuery, 57)
               << " LeftFixedWidthLogical=" << kLeftColumnWidthLogical
@@ -295,11 +297,32 @@ void Run(HWND window) {
               << " CloseButtonRight=" << Message(window, kQuery, 62)
               << " CommLeft=" << Message(window, kQuery, 63)
               << " CommWidth=" << Message(window, kQuery, 64) << '\n';
+    std::this_thread::sleep_for(std::chrono::milliseconds(150));
+    Check(query(kRecordRefreshTimerActiveQuery) == 0,
+          "record refresh timer remained armed after startup settled");
+    std::this_thread::sleep_for(std::chrono::milliseconds(150));
+    Check(query(kRecordRefreshTimerActiveQuery) == 0,
+          "record refresh timer rearmed while the view was idle");
+
     // Populate only the test instance's display buffer, without opening hardware.
     // Subsequent width checks therefore include an active native scrollbar.
     std::wstring recordProbe(257, L'X');
     COPYDATASTRUCT probe{6, static_cast<DWORD>((recordProbe.size() + 1) * sizeof(wchar_t)), recordProbe.data()};
     Message(window, WM_COPYDATA, 0, reinterpret_cast<LPARAM>(&probe));
+    Check(query(kRecordRefreshTimerActiveQuery) == 1,
+          "one record batch did not arm the coalesced refresh timer");
+    bool refreshCompleted = false;
+    for (int attempt = 0; attempt < 100; ++attempt) {
+        if (query(kRecordRefreshTimerActiveQuery) == 0) {
+            refreshCompleted = true;
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    Check(refreshCompleted, "one record batch did not complete its coalesced refresh");
+    std::this_thread::sleep_for(std::chrono::milliseconds(150));
+    Check(query(kRecordRefreshTimerActiveQuery) == 0,
+          "record refresh timer stayed armed after the batch was painted");
     std::array<std::array<HWND, 3>, kMaximumStoredCustomSlots> handles{};
     std::set<HWND> unique;
     HWND intervalEdit = GetDlgItem(window, kIntervalEditId);

@@ -364,6 +364,7 @@ public:
     void Command(int id, int notification, HWND sender);
     void Timer(UINT_PTR id);
     void DeviceChanged();
+    void SerialDataReady();
     void DrainReceive();
     void SerialError(std::unique_ptr<SerialFailure> failure);
     void UpdateFound(std::unique_ptr<UpdateManifest> manifest);
@@ -407,6 +408,8 @@ private:
     void FillProtocolResultIntoCustomSlot(int slot);
     void EnableHexSendForProtocolResult();
     void UpdateProtocolFeedback(const std::wstring& text);
+    void MarkRecordViewChanged();
+    void ScheduleRecordRefresh();
     void AppendRecord(bool receive, const std::vector<std::uint8_t>& data);
     void CopyRecords(int mode);
     void ShowCopyMenu();
@@ -440,6 +443,7 @@ private:
     bool timedSendBlocked_ = false;
     bool disconnectHandled_ = true;
     bool shuttingDown_ = false;
+    bool recordRefreshTimerActive_ = false;
     std::chrono::steady_clock::time_point started_;
     std::vector<SerialPortInfo> portInfos_;
     std::wstring connectedPort_;
@@ -633,7 +637,6 @@ void Application::Create() {
     ScanPorts(false);
     SetConnectedUi(false);
     SetTimer(window_, TIMER_STATS, 500, nullptr);
-    SetTimer(window_, TIMER_RECORD_VIEW, 33, nullptr);
     recordView_.SetTimestamps(Checked(ID_TIMESTAMP));
     Layout();
     updateChecker_.Start([hwnd = window_](UpdateManifest manifest) {
@@ -1080,7 +1083,7 @@ void Application::SetTextEncoding(textcodec::TextEncoding encoding) {
     rxDecoder_.Reset(encoding_);
     recordView_.SetEncoding(encoding_);
     if (Get(ID_ENCODING)) SendMessageW(Get(ID_ENCODING), CB_SETCURSEL, encodingIndex, 0);
-    recordView_.Changed();
+    MarkRecordViewChanged();
 }
 
 void Application::FlushRxPending() {
@@ -1089,7 +1092,7 @@ void Application::FlushRxPending() {
         records_.Add(comm::Direction::Rx,
                      rxPendingTimestamp_.empty() ? util::Timestamp() : rxPendingTimestamp_,
                      std::move(bytes));
-        recordView_.Changed();
+        MarkRecordViewChanged();
     }
     rxPendingTimestamp_.clear();
 }
@@ -1340,6 +1343,27 @@ void Application::AppendSystem(const std::wstring& text, bool error) {
     logWriter_->WriteRecord(record, encoding_);
 }
 
+void Application::ScheduleRecordRefresh() {
+    if (shuttingDown_ || paused_ || recordRefreshTimerActive_) return;
+    recordRefreshTimerActive_ = true;
+    if (SetTimer(window_, TIMER_RECORD_VIEW, 33, nullptr) != 0) return;
+    // Preserve delivery even if the UI timer cannot be allocated.
+    DrainReceive();
+    recordView_.Refresh(Checked(ID_AUTOLINE));
+    recordRefreshTimerActive_ = false;
+}
+
+void Application::SerialDataReady() {
+    // Pausing freezes only the view; receive accounting and bounded queues continue.
+    if (paused_) DrainReceive();
+    else ScheduleRecordRefresh();
+}
+
+void Application::MarkRecordViewChanged() {
+    recordView_.Changed();
+    ScheduleRecordRefresh();
+}
+
 void Application::AppendRecord(bool receive, const std::vector<std::uint8_t>& data) {
     if (data.empty()) return;
     const auto& record = records_.Add(receive ? comm::Direction::Rx : comm::Direction::Tx,
@@ -1347,7 +1371,7 @@ void Application::AppendRecord(bool receive, const std::vector<std::uint8_t>& da
     // RX logging is queued before the bounded UI queue. TX is queued here.
     if (!receive) logWriter_->WriteRecord(record, encoding_);
     recorder_->Write(RecorderLine(record));
-    recordView_.Changed();
+    MarkRecordViewChanged();
 }
 
 void Application::CopyRecords(int mode) {
@@ -1395,7 +1419,7 @@ void Application::DrainReceive() {
             records_.Add(comm::Direction::Rx,
                          rxPendingTimestamp_.empty() ? item.timestamp : rxPendingTimestamp_,
                          std::move(ready));
-            recordView_.Changed();
+            MarkRecordViewChanged();
         }
         if (rxDecoder_.PendingSize() != 0) rxPendingTimestamp_ = item.timestamp;
         else rxPendingTimestamp_.clear();
@@ -1527,6 +1551,7 @@ void Application::Command(int id, int notification, HWND) {
     case ID_CLEAR_SEND: SetWindowTextW(Get(ID_SEND_EDIT), L""); break;
     case ID_CLEAR_LOG:
         recordView_.Clear();
+        ScheduleRecordRefresh();
         rxBytes_ = 0;
         txBytes_ = 0;
         UpdateStatus();
@@ -1535,13 +1560,13 @@ void Application::Command(int id, int notification, HWND) {
     case ID_COPY_FULL: case ID_COPY_HEX: case ID_COPY_TEXT:
     case ID_COPY_SELECTED_FULL: case ID_COPY_SELECTED_HEX: case ID_COPY_SELECTED_TEXT:
         CopyRecords(id); break;
-    case ID_PAUSE: paused_ = !paused_; recordView_.SetPaused(paused_); SetWindowTextW(Get(ID_PAUSE), paused_ ? L"继续显示" : L"暂停显示"); break;
+    case ID_PAUSE: paused_ = !paused_; recordView_.SetPaused(paused_); ScheduleRecordRefresh(); SetWindowTextW(Get(ID_PAUSE), paused_ ? L"继续显示" : L"暂停显示"); break;
     case ID_EXPORT: ExportLog(); break;
     case ID_TIMESTAMP: if (notification == BN_CLICKED) recordView_.SetTimestamps(Checked(ID_TIMESTAMP)); break;
     case ID_AUTOLINE: if (notification == BN_CLICKED) recordView_.SetAutoFollowEnabled(Checked(ID_AUTOLINE)); break;
-    case ID_SIMPLE_MODE: if (notification == BN_CLICKED) recordView_.SetSimpleMode(Checked(ID_SIMPLE_MODE)); break;
-    case ID_RX_ONLY: if (notification == BN_CLICKED) recordView_.SetReceiveOnly(Checked(ID_RX_ONLY)); break;
-    case ID_RX_HEX: if (notification == BN_CLICKED) recordView_.SetReceiveHex(Checked(ID_RX_HEX)); break;
+    case ID_SIMPLE_MODE: if (notification == BN_CLICKED) { recordView_.SetSimpleMode(Checked(ID_SIMPLE_MODE)); ScheduleRecordRefresh(); } break;
+    case ID_RX_ONLY: if (notification == BN_CLICKED) { recordView_.SetReceiveOnly(Checked(ID_RX_ONLY)); ScheduleRecordRefresh(); } break;
+    case ID_RX_HEX: if (notification == BN_CLICKED) { recordView_.SetReceiveHex(Checked(ID_RX_HEX)); ScheduleRecordRefresh(); } break;
     case ID_ENCODING:
         if (notification == CBN_SELCHANGE) SetTextEncoding(ComboSelection(ID_ENCODING) == 1
             ? textcodec::TextEncoding::Gbk : ComboSelection(ID_ENCODING) == 2
@@ -1594,12 +1619,17 @@ void Application::Command(int id, int notification, HWND) {
 
 void Application::Timer(UINT_PTR id) {
     if (id == TIMER_SEND) SendData(true);
-    else if (id == TIMER_STATS) UpdateStatus();
+    else if (id == TIMER_STATS) {
+        // Preserve a low-frequency fallback for a pending receive notification.
+        if (rxIngress_->NotificationPending()) SerialDataReady();
+        UpdateStatus();
+    }
     else if (id == TIMER_RECORD_VIEW) {
-        // Drain raw receive batches on the UI cadence, then repaint only when
-        // the bounded model changed. SerialWorker never formats or paints.
+        if (!recordRefreshTimerActive_) return;
+        KillTimer(window_, TIMER_RECORD_VIEW);
         DrainReceive();
         recordView_.Refresh(Checked(ID_AUTOLINE));
+        recordRefreshTimerActive_ = false;
     }
 }
 
@@ -1718,6 +1748,7 @@ void Application::Shutdown() {
     if (shuttingDown_) return; shuttingDown_ = true;
     SaveConfiguration();
     KillTimer(window_, TIMER_SEND); KillTimer(window_, TIMER_STATS); KillTimer(window_, TIMER_RECORD_VIEW);
+    recordRefreshTimerActive_ = false;
     updateChecker_.Stop();
     const auto closeResult = serial_.Close();
     if (closeResult == SerialPort::CloseResult::ForcedHandleClose)
@@ -1800,6 +1831,7 @@ LRESULT Application::QueryState(WPARAM query) const {
     case 63: return layout_.commRecordCard.left;
     case 64: return layout_.commRecordCard.right - layout_.commRecordCard.left;
     case 65: return layout_.currentVisibleContentRight;
+    case 66: return recordRefreshTimerActive_ ? 1 : 0;
     default: return -1;
     }
 }
@@ -1810,7 +1842,7 @@ void Application::SetTestValue(ULONG_PTR key, const wchar_t* value) {
     else if (key == 2) SetWindowTextW(Get(ID_INTERVAL), value);
     else if (key == 3) LoadFilePath(value);
     else if (key == 4) ExportLogPath(value);
-    else if (key == 6) { std::vector<std::uint8_t> bytes(wcslen(value), static_cast<std::uint8_t>('X')); try { records_.Add(comm::Direction::Rx, util::Timestamp(), std::move(bytes)); recordView_.Changed(); } catch (...) {} }
+    else if (key == 6) { std::vector<std::uint8_t> bytes(wcslen(value), static_cast<std::uint8_t>('X')); try { records_.Add(comm::Direction::Rx, util::Timestamp(), std::move(bytes)); MarkRecordViewChanged(); } catch (...) {} }
     else if (key == 7) { recordView_.SelectRow(0); CopyRecords(ID_COPY_SELECTED_FULL); }
     else if (key >= 8 && key <= 13) { CopyRecords(static_cast<int>(key - 8 + ID_COPY_FULL)); }
     else if (key == 14) {
@@ -1870,7 +1902,7 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
     case WM_CTLCOLORSTATIC: case WM_CTLCOLORBTN: case WM_CTLCOLOREDIT: case WM_CTLCOLORLISTBOX:
         if (app) return reinterpret_cast<LRESULT>(app->ControlColor(reinterpret_cast<HDC>(wParam), reinterpret_cast<HWND>(lParam), message)); break;
     case WM_SERIAL_DATA: {
-        if (app) app->DrainReceive();
+        if (app) app->SerialDataReady();
         return 0;
     }
     case WM_SERIAL_ERROR: {
