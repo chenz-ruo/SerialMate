@@ -1,6 +1,6 @@
-# SerialMate v1.1.1 测试结果
+# SerialMate v1.1.2 测试结果
 
-测试日期：2026-09-15
+测试日期：2026-09-16
 系统：Windows 11 x64（10.0.26200.0）
 编译器：MSVC 19.50，Windows SDK 10.0.26100.0
 硬件：USB-SERIAL CH340（COM7，VID 1A86 / PID 7523），TX/RX 短接，115200 8N1
@@ -8,10 +8,10 @@
 ## 发布证据
 
 - 正式候选提交、源码树、构建输入指纹、EXE 大小与 SHA-256 由最终验证生成的 `dist\SerialMate\BUILD_METADATA.txt` 和 `VERIFIED_RELEASE.txt` 记录。
-- FileVersion / ProductVersion / CMake / About / manifest 均为 `1.1.1`。
+- FileVersion / ProductVersion / CMake / About / manifest 均为 `1.1.2`。
 - 产品信息：`SerialMate` / `SerialMate 串口助手` / 作者“如果”。
 - 正式 Release 上传 `SerialMate.exe`；测试程序、PDB、截图和验证文件不作为用户资产上传。
-- GitHub 和 Gitee 的 v1.1.1 Release 均已创建，下载文件大小为 613376 bytes，SHA-256 为 `8C4ED104625B09FC435B040E9EB02F5DF78E67CF472F1B29BB955C9FAD31D562`。
+- v1.1.2 候选 EXE 大小为 614400 bytes，SHA-256 为 `645CC6F1D3640487D579C2A3C63BF4762462DF0BFA0B12EF4E71CF1DBEB7D329`；GitHub 和 Gitee Release 将在最终验证后创建。
 
 ## 自动测试
 
@@ -49,6 +49,8 @@ Release x64 干净构建成功，CTest 18/18 通过：
 - Modbus RTU CRC-16、03/04/06/10 完整帧、非法参数和数据长度校验通过。
 - 协议生成结果复制、填入自定义槽位及自动启用 HEX 发送通过。
 - 通信记录查找功能、旧发送文件和无 UI 入口的 Raw RX 保存代码已删除。
+- 通信记录刷新改为有数据时按需合并，空闲时不保持记录刷新定时器；统计栏更新周期为 1 秒。
+- 结构化日志 RX 路径使用移动语义，减少一次原始记录复制；队列上限和退出握手保持不变。
 
 ## 真实串口回环
 
@@ -61,7 +63,7 @@ Release x64 干净构建成功，CTest 18/18 通过：
 
 ## EXE UI 实机回归
 
-- 主窗口标题为“SerialMate 串口助手”，About 显示 v1.1.1；启动窗口在当前显示器工作区居中。
+- 主窗口标题为“SerialMate 串口助手”，About 显示 v1.1.2；启动窗口在当前显示器工作区居中。
 - 首次 1536×1024 布局、1920×1080 布局及返回 1536×1024 的几何坐标一致；通信记录与串口设置顶边、数据发送与发送设置底边对齐。
 - 发送编辑框与通信记录使用同一 HFONT 和正常字重。
 - 默认为 115200/8/1/None/None，时间戳、自动滚动和十六进制显示开启；接收独显、传统古法、十六进制发送、CR、LF 和定时发送关闭，间隔 1000 ms，UTF-8。
@@ -83,4 +85,4 @@ Release x64 干净构建成功，CTest 18/18 通过：
 
 - 实机硬件范围为当前 CH340 COM7；FT232、CP210x 及其他驱动组合未做本轮实机覆盖。
 - 自动化发布机未覆盖物理 USB 拔出/插回；该项已由用户实机验证通过。
-- 33 ms 通信视图定时器在空闲时仍存在；当前 CPU 开销低，按 P3 记录，本轮不重构 UI 刷新架构。
+- 通信记录刷新改为有数据时按需合并的 33 ms 定时器，空闲时不保持记录刷新定时器；统计栏保持 1 秒更新周期。

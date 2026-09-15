@@ -1,4 +1,4 @@
-# SerialMate 串口助手 v1.1.1
+# SerialMate 串口助手 v1.1.2
 
 SerialMate 串口助手是一款轻量、原生的 Windows 串口调试工具。程序使用 Win32 API 和 C++17 实现，不依赖 .NET 或第三方运行库；Release 版本静态链接 C/C++ 运行时，可直接复制运行。
 

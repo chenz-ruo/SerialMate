@@ -1,4 +1,4 @@
-version=1.1.1
-url=https://github.com/chenz-ruo/SerialMate/releases/download/v1.1.1/SerialMate.exe
-sha256=9C09FC8D71FC11C702CA0016D6BD92A4E091955A5E41D3A319E2464C7088DE75
-size=613376
+version=1.1.2
+url=https://github.com/chenz-ruo/SerialMate/releases/download/v1.1.2/SerialMate.exe
+sha256=645CC6F1D3640487D579C2A3C63BF4762462DF0BFA0B12EF4E71CF1DBEB7D329
+size=614400
