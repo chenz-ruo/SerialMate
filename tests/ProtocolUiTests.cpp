@@ -388,7 +388,7 @@ void CheckInteractions(HWND window) {
     Check(Message(window, kQuery, 2) == txBefore,
           "filling custom slot 16 transmitted serial data");
 
-    SetText(window, protocolui::SlaveEdit, L"0");
+    SetText(window, protocolui::SlaveEdit, L"256");
     Click(window, protocolui::Generate);
     Check(Text(GetDlgItem(window, protocolui::ResultEdit)) == expected,
           "invalid generation cleared the previous valid result");

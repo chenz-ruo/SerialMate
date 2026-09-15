@@ -40,6 +40,14 @@ void ExpectInvalid(protocol::Request request, const wchar_t* message) {
 }
 
 void CheckStandardFrames() {
+    auto broadcast = Request(protocol::Function::ReadHoldingRegisters, L"0000", L"0001");
+    broadcast.slave = L"0";
+    CheckFrame(broadcast, L"00 03 00 00 00 01 85 DB", 0x85, 0xDB,
+               L"广播地址标准帧不匹配");
+    auto extended = Request(protocol::Function::ReadHoldingRegisters, L"0000", L"0001");
+    extended.slave = L"255";
+    CheckFrame(extended, L"FF 03 00 00 00 01 91 D4", 0x91, 0xD4,
+               L"扩展地址标准帧不匹配");
     CheckFrame(Request(protocol::Function::ReadCoils, L"0013", L"0025"),
                L"01 01 00 13 00 25 0C 14", 0x0C, 0x14, L"01 标准帧不匹配");
     CheckFrame(Request(protocol::Function::ReadDiscreteInputs, L"00C4", L"0016"),
@@ -75,7 +83,7 @@ void CheckCrcVector() {
 }
 
 void CheckInvalidParameters() {
-    for (const wchar_t* slave : {L"", L"0", L"248", L"01A", L"-1", L"1000"}) {
+    for (const wchar_t* slave : {L"", L"256", L"01A", L"-1", L"1000"}) {
         auto request = Request(protocol::Function::ReadHoldingRegisters, L"0000", L"0001");
         request.slave = slave;
         ExpectInvalid(request, L"非法从机地址被接受");

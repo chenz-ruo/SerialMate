@@ -45,8 +45,12 @@ std::optional<std::uint8_t> ParseSlave(const std::wstring& input, std::wstring& 
         }
         value = value * 10 + static_cast<std::uint32_t>(character - L'0');
     }
-    if (value < 1 || value > 247) {
-        error = L"从机地址范围必须是1-247";
+    // The RTU address field is one byte.  Do not impose the usual 1-247
+    // device-address policy here; callers may also generate broadcast (0) or
+    // vendor-specific 248-255 frames. Values above one byte cannot be encoded
+    // without silently truncating the address, so they remain invalid.
+    if (value > 255) {
+        error = L"从机地址必须是十进制0-255";
         return std::nullopt;
     }
     return static_cast<std::uint8_t>(value);

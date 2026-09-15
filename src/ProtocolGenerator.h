@@ -22,7 +22,7 @@ enum class Function : std::uint8_t {
 struct Request {
     Type type = Type::ModbusRtu;
     Function function = Function::ReadHoldingRegisters;
-    // Modbus slave addresses are entered in decimal (1-247). Other numeric
+    // Modbus slave addresses are entered in decimal (0-255). Other numeric
     // fields remain hexadecimal engineering values.
     std::wstring slave = L"1";
     std::wstring address;
