@@ -82,7 +82,27 @@ struct LogWriter::State final {
     std::uint64_t unreportedDroppedRecords = 0;
     logdetail::StructuredRxAssembler rxAssembler;
     static constexpr std::size_t kMaximumQueuedBytes = 8 * 1024 * 1024;
+
+    template <typename RecordArg>
+    void EnqueueRecord(RecordArg&& record, textcodec::TextEncoding encoding);
 };
+
+template <typename RecordArg>
+void LogWriter::State::EnqueueRecord(RecordArg&& record, textcodec::TextEncoding encoding) {
+    const std::size_t bytes = record.rawBytes.size() + record.timestamp.size() * sizeof(wchar_t) + 64;
+    const std::size_t total = std::min(queuedBytes + queuedRecordBytes, kMaximumQueuedBytes);
+    if (bytes > kMaximumQueuedBytes - total) {
+        pendingDroppedBytes += record.rawBytes.size();
+        ++pendingDroppedRecords;
+        unreportedDroppedBytes += record.rawBytes.size();
+        ++unreportedDroppedRecords;
+        condition.notify_one();
+        return;
+    }
+    queuedRecordBytes += bytes;
+    recordQueue.push_back(RecordItem{std::forward<RecordArg>(record), encoding});
+    condition.notify_one();
+}
 
 LogWriter::LogWriter() : state_(std::make_shared<State>()) {}
 
@@ -149,21 +169,15 @@ void LogWriter::Write(std::string text) {
 void LogWriter::WriteRecord(const comm::Record& record, textcodec::TextEncoding encoding) {
     const auto state = state_;
     std::lock_guard<std::mutex> lock(state->mutex);
-    const std::size_t bytes = record.rawBytes.size() + record.timestamp.size() * sizeof(wchar_t) + 64;
     if (!state->active || state->stopping) return;
-    const std::size_t total = std::min(state->queuedBytes + state->queuedRecordBytes,
-                                       State::kMaximumQueuedBytes);
-    if (bytes > State::kMaximumQueuedBytes - total) {
-        state->pendingDroppedBytes += record.rawBytes.size();
-        ++state->pendingDroppedRecords;
-        state->unreportedDroppedBytes += record.rawBytes.size();
-        ++state->unreportedDroppedRecords;
-        state->condition.notify_one();
-        return;
-    }
-    state->queuedRecordBytes += bytes;
-    state->recordQueue.push_back(State::RecordItem{record, encoding});
-    state->condition.notify_one();
+    state->EnqueueRecord(record, encoding);
+}
+
+void LogWriter::WriteRecord(comm::Record&& record, textcodec::TextEncoding encoding) {
+    const auto state = state_;
+    std::lock_guard<std::mutex> lock(state->mutex);
+    if (!state->active || state->stopping) return;
+    state->EnqueueRecord(std::move(record), encoding);
 }
 
 LogWriter::OverflowStatus LogWriter::TakeOverflowStatus() {

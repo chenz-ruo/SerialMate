@@ -47,6 +47,8 @@ public:
     void Write(std::string text);
     void WriteRecord(const comm::Record& record,
                      textcodec::TextEncoding encoding = textcodec::TextEncoding::Utf8);
+    void WriteRecord(comm::Record&& record,
+                     textcodec::TextEncoding encoding = textcodec::TextEncoding::Utf8);
     bool IsActive() const;
     OverflowStatus TakeOverflowStatus();
 

@@ -9,6 +9,7 @@
 #include <iostream>
 #include <string>
 #include <thread>
+#include <utility>
 
 namespace {
 int failures = 0;
@@ -72,6 +73,11 @@ int wmain() {
     record.direction = comm::Direction::Rx;
     record.rawBytes = {0xc4, 0xe3};
     writer.WriteRecord(record, textcodec::TextEncoding::Gbk);
+    comm::Record movedRecord;
+    movedRecord.timestamp = L"T-move";
+    movedRecord.direction = comm::Direction::Tx;
+    movedRecord.rawBytes = {0x01, 0x02, 0x03};
+    writer.WriteRecord(std::move(movedRecord), textcodec::TextEncoding::Utf8);
     writer.Write(std::string(8 * 1024 * 1024 + 1, 'X'));
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
     const auto overflow = writer.TakeOverflowStatus();
@@ -82,6 +88,7 @@ int wmain() {
     std::ifstream input(path, std::ios::binary);
     const std::string content((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
     Check(content.find("\xE4\xBD\xA0") != std::string::npos, L"GBK record logged as UTF-8 visible text");
+    Check(content.find("T-move") != std::string::npos, L"moved record logged without payload loss");
     Check(content.find("[WARNING] Log queue overflow") != std::string::npos,
           L"overflow marker written");
     std::filesystem::remove(path, ignored);

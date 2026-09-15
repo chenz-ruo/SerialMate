@@ -1142,8 +1142,8 @@ void Application::OpenPort() {
             const int choice = encodingChoice->load(std::memory_order_relaxed);
             const auto encoding = choice == 1 ? textcodec::TextEncoding::Gbk :
                                   choice == 2 ? textcodec::TextEncoding::Ascii : textcodec::TextEncoding::Utf8;
-            log->WriteRecord(event, encoding);
             recorder->Write(RecorderLine(event));
+            log->WriteRecord(std::move(event), encoding);
             ingress->Push(timestamp, std::move(bytes));
         },
         [hwnd = window_](DWORD code, std::wstring message) {
@@ -1340,7 +1340,7 @@ void Application::AppendSystem(const std::wstring& text, bool error) {
     record.direction = error ? comm::Direction::Error : comm::Direction::Notice;
     record.kind = comm::RecordKind::System;
     record.message = message.substr(0, 4096);
-    logWriter_->WriteRecord(record, encoding_);
+    logWriter_->WriteRecord(std::move(record), encoding_);
 }
 
 void Application::ScheduleRecordRefresh() {
