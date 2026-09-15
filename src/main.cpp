@@ -636,7 +636,7 @@ void Application::Create() {
     });
     ScanPorts(false);
     SetConnectedUi(false);
-    SetTimer(window_, TIMER_STATS, 500, nullptr);
+    SetTimer(window_, TIMER_STATS, 1000, nullptr);
     recordView_.SetTimestamps(Checked(ID_TIMESTAMP));
     Layout();
     updateChecker_.Start([hwnd = window_](UpdateManifest manifest) {
