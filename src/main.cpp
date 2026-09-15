@@ -212,12 +212,30 @@ void CenterSingleLineEditText(HWND window) {
     SendMessageW(window, EM_SETRECTNP, 0, reinterpret_cast<LPARAM>(&format));
 }
 
+void RedrawEditContent(HWND window) {
+    // Native multiline EDIT controls can retain pixels from the previous
+    // string after the custom text rectangle is changed.  Erase and repaint
+    // synchronously so short values (for example an interval or HEX address)
+    // never leave stale glyphs behind.
+    RedrawWindow(window, nullptr, nullptr,
+                 RDW_INVALIDATE | RDW_ERASE | RDW_UPDATENOW | RDW_ALLCHILDREN);
+}
+
 LRESULT CALLBACK IntervalEditSubclass(HWND window, UINT message, WPARAM wParam, LPARAM lParam,
                                       UINT_PTR subclassId, DWORD_PTR) {
     if (message == WM_CHAR && (wParam == L'\r' || wParam == L'\n')) return 0;
     if (message == WM_SIZE || message == WM_SETFONT) {
         const LRESULT result = DefSubclassProc(window, message, wParam, lParam);
         CenterSingleLineEditText(window);
+        RedrawEditContent(window);
+        return result;
+    }
+    if (message == WM_SETTEXT || message == WM_PASTE || message == WM_CUT ||
+        message == WM_CLEAR || message == WM_UNDO ||
+        message == WM_CHAR ||
+        (message == WM_KEYUP && (wParam == VK_BACK || wParam == VK_DELETE))) {
+        const LRESULT result = DefSubclassProc(window, message, wParam, lParam);
+        RedrawEditContent(window);
         return result;
     }
     if (message == WM_PAINT || message == WM_NCPAINT) {
