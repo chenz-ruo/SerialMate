@@ -11,7 +11,7 @@
 - FileVersion / ProductVersion / CMake / About / manifest 均为 `1.1.2`。
 - 产品信息：`SerialMate` / `SerialMate 串口助手` / 作者“如果”。
 - 正式 Release 上传 `SerialMate.exe`；测试程序、PDB、截图和验证文件不作为用户资产上传。
-- v1.1.2 候选 EXE 大小为 614400 bytes，SHA-256 为 `645CC6F1D3640487D579C2A3C63BF4762462DF0BFA0B12EF4E71CF1DBEB7D329`；GitHub 和 Gitee Release 将在最终验证后创建。
+- GitHub 和 Gitee 的 v1.1.2 Release 已创建；EXE 大小为 614400 bytes，SHA-256 为 `645CC6F1D3640487D579C2A3C63BF4762462DF0BFA0B12EF4E71CF1DBEB7D329`。
 
 ## 自动测试
 
